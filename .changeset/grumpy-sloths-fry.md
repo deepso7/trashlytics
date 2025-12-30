@@ -1,5 +1,0 @@
----
-"trashlytics": patch
----
-
-bump node
