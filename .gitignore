@@ -101,3 +101,4 @@ vite.config.ts.timestamp-*
 .vite/
 
 dist
+effect
