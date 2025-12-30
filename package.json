@@ -23,6 +23,7 @@
     "ultracite": "6.5.0"
   },
   "dependencies": {
+    "@effect/platform": "0.94.0",
     "effect": "3.19.13"
   }
 }
