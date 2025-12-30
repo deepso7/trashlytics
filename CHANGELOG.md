@@ -1,5 +1,11 @@
 # trashlytics
 
+## 0.0.4
+
+### Patch Changes
+
+- d5a5fc0: test
+
 ## 0.0.3
 
 ### Patch Changes
