@@ -1,10 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { make } from "../src/Event.js";
+import { createEvent } from "../src/event.js";
 
 describe("Event", () => {
-  describe("make", () => {
+  describe("createEvent", () => {
     it("should create an event with the given name and payload", () => {
-      const event = make("test_event", { foo: "bar" }, { id: "123" });
+      const event = createEvent("test_event", { foo: "bar" }, { id: "123" });
 
       expect(event.id).toBe("123");
       expect(event.name).toBe("test_event");
@@ -14,7 +14,7 @@ describe("Event", () => {
     });
 
     it("should include metadata when provided", () => {
-      const event = make(
+      const event = createEvent(
         "test_event",
         { foo: "bar" },
         {
@@ -31,7 +31,7 @@ describe("Event", () => {
 
     it("should use custom timestamp when provided", () => {
       const customTimestamp = 1_234_567_890;
-      const event = make(
+      const event = createEvent(
         "test_event",
         {},
         {
@@ -45,7 +45,7 @@ describe("Event", () => {
 
     it("should use Date.now() when timestamp not provided", () => {
       const before = Date.now();
-      const event = make("test_event", {}, { id: "123" });
+      const event = createEvent("test_event", {}, { id: "123" });
       const after = Date.now();
 
       expect(event.timestamp).toBeGreaterThanOrEqual(before);

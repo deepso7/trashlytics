@@ -3,9 +3,6 @@
   "extends": ["ultracite/core"],
   "linter": {
     "rules": {
-      "style": {
-        "useFilenamingConvention": "off"
-      },
       "performance": {
         "noBarrelFile": "off"
       }

@@ -1,6 +1,5 @@
 /**
- * Default ID generator for events.
- * Uses crypto.randomUUID if available, falls back to a simple random string.
+ * Default ID generator.
  */
 export const generateId = (): string => {
   if (typeof crypto !== "undefined" && crypto.randomUUID) {

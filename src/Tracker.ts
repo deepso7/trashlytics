@@ -1,210 +1,301 @@
 /**
- * Tracker module - main entry point for tracking events.
+ * Tracker - main entry point with vanilla JS API.
+ * Uses Effect internally for batching, retry, and queue management.
  *
  * @since 1.0.0
  */
-import {
-  Context,
-  type Duration,
-  Effect,
-  Fiber,
-  Layer,
-  Option,
-  type Scope,
-} from "effect";
-import type { Config } from "./Config.js";
-import { resolve } from "./Config.js";
-import { make as makeDispatcher } from "./Dispatcher.js";
-import type { Event } from "./Event.js";
-import { make as makeEvent } from "./Event.js";
+import { Duration, Effect, Exit, Fiber, Queue, Schedule, Scope } from "effect";
+import type { QueueStrategy, ResolvedConfig, TrackerConfig } from "./config.js";
+import { resolveConfig } from "./config.js";
+import type { Event } from "./event.js";
+import { createEvent } from "./event.js";
 import { generateId as defaultGenerateId } from "./internal/id.js";
-import type { Middleware } from "./Middleware.js";
-import { identity } from "./Middleware.js";
-import type { IEventQueue } from "./Queue.js";
-import { make as makeQueue } from "./Queue.js";
-import type { TransportError, Transports } from "./Transport.js";
+import type { Middleware } from "./middleware.js";
+import { identity } from "./middleware.js";
+import type { Transport } from "./transport.js";
+import { TransportError } from "./transport.js";
 
 /**
- * Tracker service interface.
- *
- * @since 1.0.0
+ * Tracker interface - the main public API.
  */
-export interface ITracker {
+export interface Tracker {
   /**
-   * Track an event with the given name and payload.
-   * This is fire-and-forget - the event is queued for later dispatch.
+   * Track an event (fire-and-forget).
+   * The event is queued and will be sent in the next batch.
    */
-  readonly track: <T>(name: string, payload: T) => Effect.Effect<void, never>;
+  track<T>(name: string, payload: T): void;
+
+  /**
+   * Track an event and wait for it to be queued.
+   */
+  trackAsync<T>(name: string, payload: T): Promise<void>;
 
   /**
    * Track an event with additional metadata.
-   * Metadata is merged with global metadata from config.
    */
-  readonly trackWith: <T>(
+  trackWith<T>(
     name: string,
     payload: T,
     metadata: Record<string, unknown>
-  ) => Effect.Effect<void, never>;
+  ): void;
 
   /**
    * Flush all queued events immediately.
    * Waits for all retries to complete.
    */
-  readonly flush: Effect.Effect<void, TransportError>;
+  flush(): Promise<void>;
 
   /**
    * Gracefully shutdown the tracker.
    * Flushes remaining events and stops the background fiber.
    */
-  readonly shutdown: Effect.Effect<void, TransportError>;
+  shutdown(): Promise<void>;
 }
 
 /**
- * Service tag for the tracker.
+ * Create a new tracker instance.
  *
- * @since 1.0.0
- */
-export class Tracker extends Context.Tag("trashlytics/Tracker")<
-  Tracker,
-  ITracker
->() {}
-
-/**
- * Create a tracker layer with the given configuration and middleware.
- *
- * @since 1.0.0
  * @example
  * ```ts
- * import { Tracker, Transports } from "trashlytics"
- * import { Effect, Layer } from "effect"
- *
- * const TrackerLive = Tracker.make({
- *   batchSize: 20,
- *   flushInterval: Duration.seconds(10),
- * }).pipe(Layer.provide(TransportsLive))
- *
- * const program = Effect.gen(function* () {
- *   const tracker = yield* Tracker
- *   yield* tracker.track("page_view", { page: "/home" })
+ * const tracker = createTracker({
+ *   transports: [httpTransport],
+ *   batchSize: 10,
+ *   flushIntervalMs: 5000,
  * })
+ *
+ * tracker.track("page_view", { page: "/home" })
+ *
+ * // Later...
+ * await tracker.shutdown()
  * ```
  */
-export const make = (
-  config?: Config,
+export const createTracker = (
+  config: TrackerConfig,
   middleware?: Middleware
-): Layer.Layer<Tracker, never, Transports> =>
-  Layer.scoped(
-    Tracker,
-    Effect.gen(function* () {
-      const resolved = resolve(config);
-      const mw = middleware ?? identity;
-      const generateId = config?.generateId ?? defaultGenerateId;
-      const globalMetadata = config?.metadata ?? {};
+): Tracker => {
+  const resolved = resolveConfig(config);
+  const mw = middleware ?? identity;
+  const generateId = config.generateId ?? defaultGenerateId;
+  const globalMetadata = config.metadata ?? {};
 
-      // Create queue
-      const queue = yield* makeQueue(
-        resolved.queueCapacity,
-        resolved.queueStrategy
-      );
+  // Internal state managed by Effect runtime
+  let runtime: TrackerRuntime | null = null;
+  let isShutdown = false;
 
-      // Create dispatcher
-      const dispatcher = yield* makeDispatcher(resolved);
+  const ensureRuntime = (): TrackerRuntime => {
+    if (isShutdown) {
+      throw new Error("Tracker has been shut down");
+    }
+    if (!runtime) {
+      runtime = createRuntime(resolved, mw, generateId, globalMetadata);
+    }
+    return runtime;
+  };
 
-      // Start background batch loop
-      const batchFiber = yield* startBatchLoop(
-        queue,
-        dispatcher.dispatch,
-        resolved.batchSize,
-        resolved.flushInterval
-      ).pipe(Effect.forkScoped);
-
-      // Create event from input
-      const createEvent = <T>(
-        name: string,
-        payload: T,
-        extraMetadata?: Record<string, unknown>
-      ) =>
-        makeEvent(name, payload, {
-          id: generateId(),
-          metadata: { ...globalMetadata, ...extraMetadata },
-        });
-
-      // Process event through middleware and queue
-      const processEvent = (event: Event) =>
-        mw.transform(event).pipe(
-          Effect.flatMap((maybeEvent) =>
-            Option.match(maybeEvent, {
-              onNone: () => Effect.void,
-              onSome: (e) => queue.offer(e).pipe(Effect.asVoid),
-            })
-          )
-        );
-
-      // Flush implementation
-      const flushAll = Effect.gen(function* () {
-        const events = yield* queue.takeAll;
-        if (events.length > 0) {
-          yield* dispatcher.dispatch(events);
-        }
+  return {
+    track: (name, payload) => {
+      const rt = ensureRuntime();
+      const event = createEvent(name, payload, {
+        id: generateId(),
+        metadata: { ...globalMetadata },
       });
+      const transformed = mw(event);
+      if (transformed) {
+        rt.offer(transformed);
+      }
+    },
 
-      // Shutdown implementation
-      const shutdownTracker = Effect.gen(function* () {
-        // Interrupt the batch loop
-        yield* Fiber.interrupt(batchFiber);
-
-        // Flush remaining events with timeout
-        yield* flushAll.pipe(
-          Effect.timeout(resolved.shutdownTimeout),
-          Effect.catchAll(() => Effect.void)
-        );
-
-        // Shutdown queue
-        yield* queue.shutdown;
+    trackAsync: async (name, payload) => {
+      const rt = ensureRuntime();
+      const event = createEvent(name, payload, {
+        id: generateId(),
+        metadata: { ...globalMetadata },
       });
+      const transformed = mw(event);
+      if (transformed) {
+        await rt.offerAsync(transformed);
+      }
+    },
 
-      return {
-        track: (name, payload) => processEvent(createEvent(name, payload)),
+    trackWith: (name, payload, metadata) => {
+      const rt = ensureRuntime();
+      const event = createEvent(name, payload, {
+        id: generateId(),
+        metadata: { ...globalMetadata, ...metadata },
+      });
+      const transformed = mw(event);
+      if (transformed) {
+        rt.offer(transformed);
+      }
+    },
 
-        trackWith: (name, payload, metadata) =>
-          processEvent(createEvent(name, payload, metadata)),
+    flush: async () => {
+      if (!runtime || isShutdown) {
+        return;
+      }
+      await runtime.flush();
+    },
 
-        flush: flushAll,
+    shutdown: async () => {
+      if (isShutdown) {
+        return;
+      }
+      isShutdown = true;
+      if (runtime) {
+        await runtime.shutdown();
+        runtime = null;
+      }
+    },
+  };
+};
 
-        shutdown: shutdownTracker,
-      };
-    })
+// Internal runtime implementation using Effect
+interface TrackerRuntime {
+  offer(event: Event): void;
+  offerAsync(event: Event): Promise<void>;
+  flush(): Promise<void>;
+  shutdown(): Promise<void>;
+}
+
+const createRuntime = (
+  config: ResolvedConfig,
+  _middleware: Middleware,
+  _generateId: () => string,
+  _globalMetadata: Record<string, unknown>
+): TrackerRuntime => {
+  // Create the Effect-based queue
+  const queueEffect = createQueue(config.queueCapacity, config.queueStrategy);
+  const scope = Effect.runSync(Scope.make());
+  const queue = Effect.runSync(queueEffect);
+
+  // Retry schedule with exponential backoff and jitter
+  const retrySchedule = Schedule.exponential(
+    Duration.millis(config.retryDelayMs)
+  ).pipe(
+    Schedule.jittered,
+    Schedule.compose(Schedule.recurs(config.retryAttempts))
   );
 
-/**
- * Background fiber that batches events and dispatches them.
- */
-const startBatchLoop = (
-  queue: IEventQueue,
-  dispatch: (events: readonly Event[]) => Effect.Effect<void, TransportError>,
-  batchSize: number,
-  flushInterval: Duration.Duration
-): Effect.Effect<void, never, Scope.Scope> =>
-  Effect.gen(function* () {
+  // Dispatch function
+  const dispatch = async (events: readonly Event[]): Promise<void> => {
+    if (events.length === 0) {
+      return;
+    }
+
+    const results = await Promise.allSettled(
+      config.transports.map((transport) =>
+        dispatchToTransport(transport, events, retrySchedule)
+      )
+    );
+
+    // Handle failures
+    for (const result of results) {
+      if (result.status === "rejected") {
+        const error = result.reason as TransportError;
+        if (config.onError) {
+          config.onError(error, events);
+        }
+        if (typeof console !== "undefined") {
+          console.error("[trashlytics] Transport failed:", error.message);
+        }
+      }
+    }
+  };
+
+  // Start background batch loop
+  const batchLoop = Effect.gen(function* () {
     yield* Effect.forever(
       Effect.gen(function* () {
-        // Race between batch size and flush interval
         const events = yield* Effect.race(
-          // Wait for full batch
-          queue.takeBetween(batchSize, batchSize),
-          // Or timeout and take whatever is available
-          Effect.sleep(flushInterval).pipe(
-            Effect.zipRight(queue.takeUpTo(batchSize))
+          Queue.takeBetween(queue, config.batchSize, config.batchSize),
+          Effect.sleep(Duration.millis(config.flushIntervalMs)).pipe(
+            Effect.zipRight(Queue.takeUpTo(queue, config.batchSize))
           )
         );
 
         if (events.length > 0) {
-          // Dispatch and ignore errors (they're already logged)
-          yield* dispatch(events).pipe(Effect.catchAll(() => Effect.void));
+          yield* Effect.tryPromise({
+            try: () => dispatch([...events]),
+            catch: () => new Error("Dispatch failed"),
+          }).pipe(Effect.catchAll(() => Effect.void));
         }
       })
     );
   });
 
-// Re-export for convenience
-export { Tracker as TrackerTag };
+  const batchFiber = Effect.runFork(
+    batchLoop.pipe(Effect.provideService(Scope.Scope, scope))
+  );
+
+  return {
+    offer: (event) => {
+      Effect.runFork(Queue.offer(queue, event));
+    },
+
+    offerAsync: (event) =>
+      Effect.runPromise(Queue.offer(queue, event)).then(() => undefined),
+
+    flush: async () => {
+      const events = await Effect.runPromise(Queue.takeAll(queue));
+      if (events.length > 0) {
+        await dispatch([...events]);
+      }
+    },
+
+    shutdown: async () => {
+      // Interrupt the batch loop
+      await Effect.runPromise(Fiber.interrupt(batchFiber));
+
+      // Flush remaining events
+      const events = await Effect.runPromise(Queue.takeAll(queue));
+      if (events.length > 0) {
+        await dispatch([...events]);
+      }
+
+      // Close scope
+      await Effect.runPromise(Scope.close(scope, Exit.void));
+    },
+  };
+};
+
+// Create queue based on strategy
+const createQueue = (capacity: number, strategy: QueueStrategy) => {
+  switch (strategy) {
+    case "bounded":
+      return Queue.bounded<Event>(capacity);
+    case "dropping":
+      return Queue.dropping<Event>(capacity);
+    case "sliding":
+      return Queue.sliding<Event>(capacity);
+    default:
+      return Queue.dropping<Event>(capacity);
+  }
+};
+
+// Dispatch to a single transport with retry
+const dispatchToTransport = async (
+  transport: Transport,
+  events: readonly Event[],
+  retrySchedule: Schedule.Schedule<unknown, unknown>
+): Promise<void> => {
+  const effect = Effect.tryPromise({
+    try: () => transport.send(events),
+    catch: (error) => {
+      if (error instanceof TransportError) {
+        return error;
+      }
+      return new TransportError({
+        transport: transport.name,
+        reason: String(error),
+        retryable: true,
+      });
+    },
+  }).pipe(
+    Effect.retry({
+      schedule: retrySchedule,
+      while: (err) => err.retryable,
+    })
+  );
+
+  await Effect.runPromise(effect);
+};

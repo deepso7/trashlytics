@@ -1,73 +1,55 @@
 /**
- * Transport module - defines the transport interface for sending events.
+ * Transport types - Promise-based interface for sending events.
  *
  * @since 1.0.0
  */
-import { Context, Data, type Effect } from "effect";
-import type { Event } from "./Event.js";
+import type { Event } from "./event.js";
 
 /**
- * Error that occurs during transport operations.
- *
- * @since 1.0.0
+ * Error thrown when a transport fails to send events.
  */
-export class TransportError extends Data.TaggedError("TransportError")<{
+export class TransportError extends Error {
+  override readonly name = "TransportError";
   readonly transport: string;
-  readonly reason: string;
   readonly retryable: boolean;
-}> {}
+
+  constructor(options: {
+    transport: string;
+    reason: string;
+    retryable: boolean;
+  }) {
+    super(options.reason);
+    this.transport = options.transport;
+    this.retryable = options.retryable;
+  }
+}
 
 /**
  * Transport interface for sending events to a destination.
- * Users implement this interface for their specific destination.
  *
- * @since 1.0.0
  * @example
  * ```ts
- * import { Transport, TransportError } from "trashlytics"
- * import { Effect } from "effect"
- *
  * const httpTransport: Transport = {
  *   name: "http",
- *   send: (events) =>
- *     Effect.tryPromise({
- *       try: () => fetch("/analytics", {
- *         method: "POST",
- *         body: JSON.stringify(events),
- *       }),
- *       catch: (e) => new TransportError({
+ *   send: async (events) => {
+ *     const response = await fetch("/analytics", {
+ *       method: "POST",
+ *       body: JSON.stringify(events),
+ *     })
+ *     if (!response.ok) {
+ *       throw new TransportError({
  *         transport: "http",
- *         reason: String(e),
- *         retryable: true,
- *       }),
- *     }).pipe(Effect.asVoid),
+ *         reason: `HTTP ${response.status}`,
+ *         retryable: response.status >= 500,
+ *       })
+ *     }
+ *   },
  * }
  * ```
  */
 export interface Transport {
+  /** Name of the transport (for debugging/logging) */
   readonly name: string;
-  readonly send: (
-    events: readonly Event[]
-  ) => Effect.Effect<void, TransportError>;
+  /** Send a batch of events. Throw TransportError on failure. */
+  send(events: readonly Event[]): Promise<void>;
 }
-
-/**
- * Service tag for providing multiple transports.
- * The tracker will fan-out events to all provided transports.
- *
- * @since 1.0.0
- * @example
- * ```ts
- * import { Transports } from "trashlytics"
- * import { Layer } from "effect"
- *
- * const TransportsLive = Layer.succeed(Transports, [
- *   httpTransport,
- *   consoleTransport,
- * ])
- * ```
- */
-export class Transports extends Context.Tag("trashlytics/Transports")<
-  Transports,
-  readonly Transport[]
->() {}

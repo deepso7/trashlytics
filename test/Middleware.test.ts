@@ -1,6 +1,5 @@
-import { Effect, Option } from "effect";
 import { describe, expect, it } from "vitest";
-import type { Event } from "../src/Event.js";
+import type { Event } from "../src/event.js";
 import {
   addMetadata,
   addMetadataFrom,
@@ -11,7 +10,7 @@ import {
   mapName,
   mapPayload,
   tap,
-} from "../src/Middleware.js";
+} from "../src/middleware.js";
 
 const makeTestEvent = (overrides?: Partial<Event>): Event => ({
   id: "test-id",
@@ -22,21 +21,13 @@ const makeTestEvent = (overrides?: Partial<Event>): Event => ({
   ...overrides,
 });
 
-const runMiddleware = <T>(
-  mw: {
-    transform: (e: Event) => Effect.Effect<Option.Option<Event<T>>, never>;
-  },
-  event: Event
-) => Effect.runSync(mw.transform(event));
-
 describe("Middleware", () => {
   describe("identity", () => {
     it("should pass events through unchanged", () => {
       const event = makeTestEvent();
-      const result = runMiddleware(identity, event);
+      const result = identity(event);
 
-      expect(Option.isSome(result)).toBe(true);
-      expect(Option.getOrThrow(result)).toEqual(event);
+      expect(result).toEqual(event);
     });
   });
 
@@ -44,17 +35,17 @@ describe("Middleware", () => {
     it("should pass events that match predicate", () => {
       const mw = filter((e) => e.name === "test_event");
       const event = makeTestEvent();
-      const result = runMiddleware(mw, event);
+      const result = mw(event);
 
-      expect(Option.isSome(result)).toBe(true);
+      expect(result).toEqual(event);
     });
 
     it("should drop events that don't match predicate", () => {
       const mw = filter((e) => e.name === "other_event");
       const event = makeTestEvent();
-      const result = runMiddleware(mw, event);
+      const result = mw(event);
 
-      expect(Option.isNone(result)).toBe(true);
+      expect(result).toBeNull();
     });
   });
 
@@ -62,21 +53,19 @@ describe("Middleware", () => {
     it("should add metadata to events", () => {
       const mw = addMetadata({ userId: "user_1" });
       const event = makeTestEvent();
-      const result = runMiddleware(mw, event);
+      const result = mw(event);
 
-      expect(Option.isSome(result)).toBe(true);
-      const transformed = Option.getOrThrow(result);
-      expect(transformed.metadata).toEqual({ userId: "user_1" });
+      expect(result).not.toBeNull();
+      expect(result?.metadata).toEqual({ userId: "user_1" });
     });
 
     it("should merge with existing metadata", () => {
       const mw = addMetadata({ newKey: "newValue" });
       const event = makeTestEvent({ metadata: { existing: "value" } });
-      const result = runMiddleware(mw, event);
+      const result = mw(event);
 
-      expect(Option.isSome(result)).toBe(true);
-      const transformed = Option.getOrThrow(result);
-      expect(transformed.metadata).toEqual({
+      expect(result).not.toBeNull();
+      expect(result?.metadata).toEqual({
         existing: "value",
         newKey: "newValue",
       });
@@ -87,11 +76,10 @@ describe("Middleware", () => {
     it("should add metadata based on event", () => {
       const mw = addMetadataFrom((e) => ({ eventName: e.name }));
       const event = makeTestEvent();
-      const result = runMiddleware(mw, event);
+      const result = mw(event);
 
-      expect(Option.isSome(result)).toBe(true);
-      const transformed = Option.getOrThrow(result);
-      expect(transformed.metadata).toEqual({ eventName: "test_event" });
+      expect(result).not.toBeNull();
+      expect(result?.metadata).toEqual({ eventName: "test_event" });
     });
   });
 
@@ -99,11 +87,10 @@ describe("Middleware", () => {
     it("should transform event name", () => {
       const mw = mapName((name) => `prefix.${name}`);
       const event = makeTestEvent();
-      const result = runMiddleware(mw, event);
+      const result = mw(event);
 
-      expect(Option.isSome(result)).toBe(true);
-      const transformed = Option.getOrThrow(result);
-      expect(transformed.name).toBe("prefix.test_event");
+      expect(result).not.toBeNull();
+      expect(result?.name).toBe("prefix.test_event");
     });
   });
 
@@ -111,11 +98,10 @@ describe("Middleware", () => {
     it("should transform payload", () => {
       const mw = mapPayload((p: { data: string }) => ({ ...p, extra: true }));
       const event = makeTestEvent();
-      const result = runMiddleware(mw, event);
+      const result = mw(event);
 
-      expect(Option.isSome(result)).toBe(true);
-      const transformed = Option.getOrThrow(result);
-      expect(transformed.payload).toEqual({ data: "test", extra: true });
+      expect(result).not.toBeNull();
+      expect(result?.payload).toEqual({ data: "test", extra: true });
     });
   });
 
@@ -123,11 +109,10 @@ describe("Middleware", () => {
     it("should transform entire event", () => {
       const mw = map((e) => ({ ...e, name: "transformed" }));
       const event = makeTestEvent();
-      const result = runMiddleware(mw, event);
+      const result = mw(event);
 
-      expect(Option.isSome(result)).toBe(true);
-      const transformed = Option.getOrThrow(result);
-      expect(transformed.name).toBe("transformed");
+      expect(result).not.toBeNull();
+      expect(result?.name).toBe("transformed");
     });
   });
 
@@ -138,11 +123,10 @@ describe("Middleware", () => {
         called = true;
       });
       const event = makeTestEvent();
-      const result = runMiddleware(mw, event);
+      const result = mw(event);
 
       expect(called).toBe(true);
-      expect(Option.isSome(result)).toBe(true);
-      expect(Option.getOrThrow(result)).toEqual(event);
+      expect(result).toEqual(event);
     });
   });
 
@@ -154,12 +138,11 @@ describe("Middleware", () => {
         addMetadata({ second: true })
       );
       const event = makeTestEvent();
-      const result = runMiddleware(mw, event);
+      const result = mw(event);
 
-      expect(Option.isSome(result)).toBe(true);
-      const transformed = Option.getOrThrow(result);
-      expect(transformed.name).toBe("prefixed.test_event");
-      expect(transformed.metadata).toEqual({ first: true, second: true });
+      expect(result).not.toBeNull();
+      expect(result?.name).toBe("prefixed.test_event");
+      expect(result?.metadata).toEqual({ first: true, second: true });
     });
 
     it("should short-circuit when filter drops event", () => {
@@ -171,19 +154,18 @@ describe("Middleware", () => {
         })
       );
       const event = makeTestEvent();
-      const result = runMiddleware(mw, event);
+      const result = mw(event);
 
-      expect(Option.isNone(result)).toBe(true);
+      expect(result).toBeNull();
       expect(afterFilterCalled).toBe(false);
     });
 
     it("should return identity when no middlewares provided", () => {
       const mw = compose();
       const event = makeTestEvent();
-      const result = runMiddleware(mw, event);
+      const result = mw(event);
 
-      expect(Option.isSome(result)).toBe(true);
-      expect(Option.getOrThrow(result)).toEqual(event);
+      expect(result).toEqual(event);
     });
   });
 });

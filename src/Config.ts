@@ -1,11 +1,10 @@
 /**
- * Config module - defines configuration for the tracker.
+ * Configuration types and defaults.
  *
  * @since 1.0.0
  */
-import { Duration, type Schedule } from "effect";
-import type { Event } from "./Event.js";
-import type { TransportError } from "./Transport.js";
+import type { Event } from "./event.js";
+import type { Transport, TransportError } from "./transport.js";
 
 /**
  * Queue overflow strategy.
@@ -13,20 +12,19 @@ import type { TransportError } from "./Transport.js";
  * - `bounded`: Back-pressure (blocks when full)
  * - `dropping`: Drops new events when full
  * - `sliding`: Drops oldest events when full
- *
- * @since 1.0.0
  */
 export type QueueStrategy = "bounded" | "dropping" | "sliding";
 
 /**
  * Configuration for the Tracker.
- *
- * @since 1.0.0
  */
-export interface Config {
+export interface TrackerConfig {
+  /** Array of transports to send events to */
+  readonly transports: readonly Transport[];
+
   /**
    * Custom ID generator for events.
-   * If not provided, uses a default UUID/random generator.
+   * If not provided, uses crypto.randomUUID or a fallback.
    */
   readonly generateId?: () => string;
 
@@ -37,10 +35,10 @@ export interface Config {
   readonly batchSize?: number;
 
   /**
-   * Maximum time to wait before flushing events.
-   * @default Duration.seconds(5)
+   * Maximum time (ms) to wait before flushing events.
+   * @default 5000
    */
-  readonly flushInterval?: Duration.Duration;
+  readonly flushIntervalMs?: number;
 
   /**
    * Maximum number of events to queue.
@@ -61,15 +59,16 @@ export interface Config {
   readonly retryAttempts?: number;
 
   /**
-   * Custom retry schedule. If not provided, uses exponential backoff with jitter.
+   * Base delay (ms) for exponential backoff.
+   * @default 1000
    */
-  readonly retrySchedule?: Schedule.Schedule<unknown, unknown>;
+  readonly retryDelayMs?: number;
 
   /**
-   * Timeout for graceful shutdown.
-   * @default Duration.seconds(30)
+   * Timeout (ms) for graceful shutdown.
+   * @default 30000
    */
-  readonly shutdownTimeout?: Duration.Duration;
+  readonly shutdownTimeoutMs?: number;
 
   /**
    * Global metadata added to all events.
@@ -85,31 +84,30 @@ export interface Config {
 
 /**
  * Default configuration values.
- *
- * @since 1.0.0
  */
 export const defaults = {
   batchSize: 10,
-  flushInterval: Duration.seconds(5),
+  flushIntervalMs: 5000,
   queueCapacity: 1000,
   queueStrategy: "dropping" as const,
   retryAttempts: 3,
-  shutdownTimeout: Duration.seconds(30),
-} satisfies Required<
-  Omit<Config, "generateId" | "metadata" | "onError" | "retrySchedule">
->;
+  retryDelayMs: 1000,
+  shutdownTimeoutMs: 30_000,
+};
+
+/**
+ * Resolved configuration with all defaults applied.
+ */
+export type ResolvedConfig = Required<
+  Omit<TrackerConfig, "generateId" | "metadata" | "onError">
+> &
+  Pick<TrackerConfig, "generateId" | "metadata" | "onError">;
 
 /**
  * Resolves a partial config with defaults.
- *
- * @since 1.0.0
  */
-export const resolve = (
-  config?: Config
-): Required<
-  Omit<Config, "generateId" | "metadata" | "onError" | "retrySchedule">
-> &
-  Config => ({
+export const resolveConfig = (config: TrackerConfig): ResolvedConfig => ({
   ...defaults,
   ...config,
+  transports: config.transports,
 });
