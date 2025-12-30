@@ -4,6 +4,8 @@
  * @since 1.0.0
  */
 import type { Event } from "./event.js";
+import type { Logger } from "./logger.js";
+import { consoleLogger } from "./logger.js";
 import type { Transport, TransportError } from "./transport.js";
 
 /**
@@ -80,6 +82,13 @@ export interface TrackerConfig {
    * Called after all retries are exhausted.
    */
   readonly onError?: (error: TransportError, events: readonly Event[]) => void;
+
+  /**
+   * Custom logger for library output.
+   * Use `noopLogger` to disable all logging.
+   * @default consoleLogger
+   */
+  readonly logger?: Logger;
 }
 
 /**
@@ -99,15 +108,28 @@ export const defaults = {
  * Resolved configuration with all defaults applied.
  */
 export type ResolvedConfig = Required<
-  Omit<TrackerConfig, "generateId" | "metadata" | "onError">
+  Omit<TrackerConfig, "generateId" | "metadata" | "onError" | "logger">
 > &
-  Pick<TrackerConfig, "generateId" | "metadata" | "onError">;
+  Pick<TrackerConfig, "generateId" | "metadata" | "onError"> & {
+    readonly logger: Logger;
+  };
 
 /**
  * Resolves a partial config with defaults.
  */
-export const resolveConfig = (config: TrackerConfig): ResolvedConfig => ({
-  ...defaults,
-  ...config,
-  transports: config.transports,
-});
+export const resolveConfig = (config: TrackerConfig): ResolvedConfig => {
+  return {
+    batchSize: config.batchSize ?? defaults.batchSize,
+    flushIntervalMs: config.flushIntervalMs ?? defaults.flushIntervalMs,
+    queueCapacity: config.queueCapacity ?? defaults.queueCapacity,
+    queueStrategy: config.queueStrategy ?? defaults.queueStrategy,
+    retryAttempts: config.retryAttempts ?? defaults.retryAttempts,
+    retryDelayMs: config.retryDelayMs ?? defaults.retryDelayMs,
+    shutdownTimeoutMs: config.shutdownTimeoutMs ?? defaults.shutdownTimeoutMs,
+    transports: config.transports,
+    generateId: config.generateId,
+    metadata: config.metadata,
+    onError: config.onError,
+    logger: config.logger ?? consoleLogger,
+  };
+};

@@ -39,10 +39,12 @@
 // Config
 export type { QueueStrategy, ResolvedConfig, TrackerConfig } from "./config.js";
 export { defaults, resolveConfig } from "./config.js";
-
 // Event
 export type { Event, EventOptions } from "./event.js";
 export { createEvent } from "./event.js";
+// Logger
+export type { Logger, LogLevel } from "./logger.js";
+export { consoleLogger, createMinLevelLogger, noopLogger } from "./logger.js";
 
 // Middleware
 export type { Middleware } from "./middleware.js";

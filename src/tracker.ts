@@ -195,9 +195,7 @@ const createRuntime = (
         if (config.onError) {
           config.onError(error, events);
         }
-        if (typeof console !== "undefined") {
-          console.error("[trashlytics] Transport failed:", error.message);
-        }
+        config.logger.error("Transport failed:", error.message);
       }
     }
   };
