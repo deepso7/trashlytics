@@ -1,5 +1,0 @@
----
-"trashlytics": patch
----
-
-Initial release
