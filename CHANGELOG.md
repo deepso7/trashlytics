@@ -1,5 +1,11 @@
 # trashlytics
 
+## 0.0.5
+
+### Patch Changes
+
+- 83911c4: test
+
 ## 0.0.4
 
 ### Patch Changes
