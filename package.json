@@ -40,6 +40,10 @@
   ],
   "author": "",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/deepso7/trashlytics"
+  },
   "packageManager": "pnpm@10.26.2",
   "devDependencies": {
     "@biomejs/biome": "2.3.10",
