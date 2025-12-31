@@ -3,7 +3,7 @@
  *
  * @since 1.0.0
  */
-import type { Event } from "./event.js";
+import type { Event, EventMap, EventUnion } from "./event.js";
 
 /**
  * Error thrown when a transport fails to send events.
@@ -27,8 +27,11 @@ export class TransportError extends Error {
 /**
  * Transport interface for sending events to a destination.
  *
+ * @template E - Event map type. Defaults to `EventMap` for reusable transports.
+ *
  * @example
  * ```ts
+ * // Reusable transport (accepts any events)
  * const httpTransport: Transport = {
  *   name: "http",
  *   send: async (events) => {
@@ -45,11 +48,25 @@ export class TransportError extends Error {
  *     }
  *   },
  * }
+ *
+ * // Typed transport (strict type checking)
+ * type MyEvents = {
+ *   page_view: { page: string }
+ *   click: { buttonId: string }
+ * }
+ *
+ * const typedTransport: Transport<MyEvents> = {
+ *   name: "typed-http",
+ *   send: async (events) => {
+ *     // events are typed as Event<MyEvents[keyof MyEvents]>[]
+ *     await fetch("/analytics", { method: "POST", body: JSON.stringify(events) })
+ *   },
+ * }
  * ```
  */
-export interface Transport {
+export interface Transport<E extends EventMap = EventMap> {
   /** Name of the transport (for debugging/logging) */
   readonly name: string;
   /** Send a batch of events. Throw TransportError on failure. */
-  send(events: readonly Event[]): Promise<void>;
+  send(events: readonly Event<EventUnion<E>>[]): Promise<void>;
 }

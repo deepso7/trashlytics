@@ -7,7 +7,7 @@
 import { Duration, Effect, Exit, Fiber, Queue, Schedule, Scope } from "effect";
 import type { QueueStrategy, ResolvedConfig, TrackerConfig } from "./config.js";
 import { resolveConfig } from "./config.js";
-import type { Event } from "./event.js";
+import type { Event, EventMap, EventUnion } from "./event.js";
 import { createEvent } from "./event.js";
 import { generateId as defaultGenerateId } from "./internal/id.js";
 import type { Middleware } from "./middleware.js";
@@ -17,25 +17,27 @@ import { TransportError } from "./transport.js";
 
 /**
  * Tracker interface - the main public API.
+ *
+ * @template E - Event map type for typed events.
  */
-export interface Tracker {
+export interface Tracker<E extends EventMap> {
   /**
    * Track an event (fire-and-forget).
    * The event is queued and will be sent in the next batch.
    */
-  track<T>(name: string, payload: T): void;
+  track<K extends keyof E & string>(name: K, payload: E[K]): void;
 
   /**
    * Track an event and wait for it to be queued.
    */
-  trackAsync<T>(name: string, payload: T): Promise<void>;
+  trackAsync<K extends keyof E & string>(name: K, payload: E[K]): Promise<void>;
 
   /**
    * Track an event with additional metadata.
    */
-  trackWith<T>(
-    name: string,
-    payload: T,
+  trackWith<K extends keyof E & string>(
+    name: K,
+    payload: E[K],
     metadata: Record<string, unknown>
   ): void;
 
@@ -55,39 +57,50 @@ export interface Tracker {
 /**
  * Create a new tracker instance.
  *
+ * @template E - Event map type for typed events.
+ *
  * @example
  * ```ts
- * const tracker = createTracker({
+ * type MyEvents = {
+ *   page_view: { page: string; referrer?: string }
+ *   button_click: { buttonId: string; label: string }
+ *   purchase: { productId: string; amount: number }
+ * }
+ *
+ * const tracker = createTracker<MyEvents>({
  *   transports: [httpTransport],
  *   batchSize: 10,
  *   flushIntervalMs: 5000,
  * })
  *
- * tracker.track("page_view", { page: "/home" })
+ * // Type-safe: name and payload are checked
+ * tracker.track("page_view", { page: "/home" }) // OK
+ * tracker.track("page_view", { wrong: "field" }) // Type error
+ * tracker.track("unknown_event", {}) // Type error
  *
  * // Later...
  * await tracker.shutdown()
  * ```
  */
-export const createTracker = (
-  config: TrackerConfig,
-  middleware?: Middleware
-): Tracker => {
+export const createTracker = <E extends EventMap>(
+  config: TrackerConfig<E>,
+  middleware?: Middleware<E>
+): Tracker<E> => {
   const resolved = resolveConfig(config);
-  const mw = middleware ?? identity;
+  const mw = middleware ?? identity<E>();
   const generateId = config.generateId ?? defaultGenerateId;
   const globalMetadata = config.metadata ?? {};
 
   // Internal state managed by Effect runtime
-  let runtime: TrackerRuntime | null = null;
+  let runtime: TrackerRuntime<E> | null = null;
   let isShutdown = false;
 
-  const ensureRuntime = (): TrackerRuntime => {
+  const ensureRuntime = (): TrackerRuntime<E> => {
     if (isShutdown) {
       throw new Error("Tracker has been shut down");
     }
     if (!runtime) {
-      runtime = createRuntime(resolved, mw, generateId, globalMetadata);
+      runtime = createRuntime<E>(resolved, generateId, globalMetadata);
     }
     return runtime;
   };
@@ -99,7 +112,7 @@ export const createTracker = (
         id: generateId(),
         metadata: { ...globalMetadata },
       });
-      const transformed = mw(event);
+      const transformed = mw(event as Event<EventUnion<E>>);
       if (transformed) {
         rt.offer(transformed);
       }
@@ -111,7 +124,7 @@ export const createTracker = (
         id: generateId(),
         metadata: { ...globalMetadata },
       });
-      const transformed = mw(event);
+      const transformed = mw(event as Event<EventUnion<E>>);
       if (transformed) {
         await rt.offerAsync(transformed);
       }
@@ -123,7 +136,7 @@ export const createTracker = (
         id: generateId(),
         metadata: { ...globalMetadata, ...metadata },
       });
-      const transformed = mw(event);
+      const transformed = mw(event as Event<EventUnion<E>>);
       if (transformed) {
         rt.offer(transformed);
       }
@@ -150,21 +163,23 @@ export const createTracker = (
 };
 
 // Internal runtime implementation using Effect
-interface TrackerRuntime {
-  offer(event: Event): void;
-  offerAsync(event: Event): Promise<void>;
+interface TrackerRuntime<E extends EventMap> {
+  offer(event: Event<EventUnion<E>>): void;
+  offerAsync(event: Event<EventUnion<E>>): Promise<void>;
   flush(): Promise<void>;
   shutdown(): Promise<void>;
 }
 
-const createRuntime = (
-  config: ResolvedConfig,
-  _middleware: Middleware,
+const createRuntime = <E extends EventMap>(
+  config: ResolvedConfig<E>,
   _generateId: () => string,
   _globalMetadata: Record<string, unknown>
-): TrackerRuntime => {
+): TrackerRuntime<E> => {
   // Create the Effect-based queue
-  const queueEffect = createQueue(config.queueCapacity, config.queueStrategy);
+  const queueEffect = createQueue<E>(
+    config.queueCapacity,
+    config.queueStrategy
+  );
   const scope = Effect.runSync(Scope.make());
   const queue = Effect.runSync(queueEffect);
 
@@ -177,7 +192,9 @@ const createRuntime = (
   );
 
   // Dispatch function
-  const dispatch = async (events: readonly Event[]): Promise<void> => {
+  const dispatch = async (
+    events: readonly Event<EventUnion<E>>[]
+  ): Promise<void> => {
     if (events.length === 0) {
       return;
     }
@@ -257,23 +274,26 @@ const createRuntime = (
 };
 
 // Create queue based on strategy
-const createQueue = (capacity: number, strategy: QueueStrategy) => {
+const createQueue = <E extends EventMap>(
+  capacity: number,
+  strategy: QueueStrategy
+) => {
   switch (strategy) {
     case "bounded":
-      return Queue.bounded<Event>(capacity);
+      return Queue.bounded<Event<EventUnion<E>>>(capacity);
     case "dropping":
-      return Queue.dropping<Event>(capacity);
+      return Queue.dropping<Event<EventUnion<E>>>(capacity);
     case "sliding":
-      return Queue.sliding<Event>(capacity);
+      return Queue.sliding<Event<EventUnion<E>>>(capacity);
     default:
-      return Queue.dropping<Event>(capacity);
+      return Queue.dropping<Event<EventUnion<E>>>(capacity);
   }
 };
 
 // Dispatch to a single transport with retry
-const dispatchToTransport = async (
-  transport: Transport,
-  events: readonly Event[],
+const dispatchToTransport = async <E extends EventMap>(
+  transport: Transport<E>,
+  events: readonly Event<EventUnion<E>>[],
   retrySchedule: Schedule.Schedule<unknown, unknown>
 ): Promise<void> => {
   const effect = Effect.tryPromise({

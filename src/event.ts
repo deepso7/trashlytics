@@ -5,6 +5,39 @@
  */
 
 /**
+ * Event map type for defining typed events.
+ * Keys are event names, values are payload types.
+ *
+ * @example
+ * ```ts
+ * interface MyEvents {
+ *   page_view: { page: string; referrer?: string }
+ *   button_click: { buttonId: string; label: string }
+ *   purchase: { productId: string; amount: number }
+ * }
+ * ```
+ */
+export interface EventMap {
+  [eventName: string]: unknown;
+}
+
+/**
+ * Utility type to get the union of all payload types from an EventMap.
+ *
+ * @example
+ * ```ts
+ * type MyEvents = {
+ *   page_view: { page: string }
+ *   button_click: { buttonId: string }
+ * }
+ *
+ * type Payload = EventUnion<MyEvents>
+ * // { page: string } | { buttonId: string }
+ * ```
+ */
+export type EventUnion<E extends EventMap> = E[keyof E];
+
+/**
  * Represents a tracked event with generic payload.
  */
 export interface Event<T = unknown> {

@@ -12,7 +12,18 @@ import {
   tap,
 } from "../src/middleware.js";
 
-const makeTestEvent = (overrides?: Partial<Event>): Event => ({
+// Define test event types
+// biome-ignore lint/style/useConsistentTypeDefinitions: type alias needed for EventMap constraint
+type TestEvents = {
+  test_event: { data: string };
+  other_event: { value: number };
+};
+
+type TestPayload = TestEvents[keyof TestEvents];
+
+const makeTestEvent = (
+  overrides?: Partial<Event<TestPayload>>
+): Event<TestPayload> => ({
   id: "test-id",
   name: "test_event",
   timestamp: 1_000_000,
@@ -25,7 +36,7 @@ describe("Middleware", () => {
   describe("identity", () => {
     it("should pass events through unchanged", () => {
       const event = makeTestEvent();
-      const result = identity(event);
+      const result = identity<TestEvents>()(event);
 
       expect(result).toEqual(event);
     });
@@ -33,7 +44,7 @@ describe("Middleware", () => {
 
   describe("filter", () => {
     it("should pass events that match predicate", () => {
-      const mw = filter((e) => e.name === "test_event");
+      const mw = filter<TestEvents>((e) => e.name === "test_event");
       const event = makeTestEvent();
       const result = mw(event);
 
@@ -41,7 +52,7 @@ describe("Middleware", () => {
     });
 
     it("should drop events that don't match predicate", () => {
-      const mw = filter((e) => e.name === "other_event");
+      const mw = filter<TestEvents>((e) => e.name === "other_event");
       const event = makeTestEvent();
       const result = mw(event);
 
@@ -51,7 +62,7 @@ describe("Middleware", () => {
 
   describe("addMetadata", () => {
     it("should add metadata to events", () => {
-      const mw = addMetadata({ userId: "user_1" });
+      const mw = addMetadata<TestEvents>({ userId: "user_1" });
       const event = makeTestEvent();
       const result = mw(event);
 
@@ -60,7 +71,7 @@ describe("Middleware", () => {
     });
 
     it("should merge with existing metadata", () => {
-      const mw = addMetadata({ newKey: "newValue" });
+      const mw = addMetadata<TestEvents>({ newKey: "newValue" });
       const event = makeTestEvent({ metadata: { existing: "value" } });
       const result = mw(event);
 
@@ -74,7 +85,7 @@ describe("Middleware", () => {
 
   describe("addMetadataFrom", () => {
     it("should add metadata based on event", () => {
-      const mw = addMetadataFrom((e) => ({ eventName: e.name }));
+      const mw = addMetadataFrom<TestEvents>((e) => ({ eventName: e.name }));
       const event = makeTestEvent();
       const result = mw(event);
 
@@ -85,7 +96,7 @@ describe("Middleware", () => {
 
   describe("mapName", () => {
     it("should transform event name", () => {
-      const mw = mapName((name) => `prefix.${name}`);
+      const mw = mapName<TestEvents>((name) => `prefix.${name}`);
       const event = makeTestEvent();
       const result = mw(event);
 
@@ -96,7 +107,12 @@ describe("Middleware", () => {
 
   describe("mapPayload", () => {
     it("should transform payload", () => {
-      const mw = mapPayload((p: { data: string }) => ({ ...p, extra: true }));
+      const mw = mapPayload<TestEvents>((p) => {
+        if ("data" in p) {
+          return { ...p, extra: true } as TestPayload;
+        }
+        return p;
+      });
       const event = makeTestEvent();
       const result = mw(event);
 
@@ -107,7 +123,7 @@ describe("Middleware", () => {
 
   describe("map", () => {
     it("should transform entire event", () => {
-      const mw = map((e) => ({ ...e, name: "transformed" }));
+      const mw = map<TestEvents>((e) => ({ ...e, name: "transformed" }));
       const event = makeTestEvent();
       const result = mw(event);
 
@@ -119,7 +135,7 @@ describe("Middleware", () => {
   describe("tap", () => {
     it("should call function without modifying event", () => {
       let called = false;
-      const mw = tap(() => {
+      const mw = tap<TestEvents>(() => {
         called = true;
       });
       const event = makeTestEvent();
@@ -132,7 +148,7 @@ describe("Middleware", () => {
 
   describe("compose", () => {
     it("should compose multiple middlewares in order", () => {
-      const mw = compose(
+      const mw = compose<TestEvents>(
         addMetadata({ first: true }),
         mapName((n) => `prefixed.${n}`),
         addMetadata({ second: true })
@@ -147,7 +163,7 @@ describe("Middleware", () => {
 
     it("should short-circuit when filter drops event", () => {
       let afterFilterCalled = false;
-      const mw = compose(
+      const mw = compose<TestEvents>(
         filter((e) => e.name === "other"),
         tap(() => {
           afterFilterCalled = true;
@@ -161,7 +177,7 @@ describe("Middleware", () => {
     });
 
     it("should return identity when no middlewares provided", () => {
-      const mw = compose();
+      const mw = compose<TestEvents>();
       const event = makeTestEvent();
       const result = mw(event);
 

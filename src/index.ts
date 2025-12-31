@@ -5,7 +5,14 @@
  * ```ts
  * import { createTracker, TransportError } from "trashlytics"
  *
- * const tracker = createTracker({
+ * // Define your event types
+ * type MyEvents = {
+ *   page_view: { page: string; referrer?: string }
+ *   button_click: { buttonId: string }
+ * }
+ *
+ * // Create a typed tracker
+ * const tracker = createTracker<MyEvents>({
  *   transports: [{
  *     name: "http",
  *     send: async (events) => {
@@ -26,6 +33,7 @@
  *   flushIntervalMs: 5000,
  * })
  *
+ * // Type-safe tracking
  * tracker.track("page_view", { page: "/home" })
  * tracker.track("button_click", { buttonId: "signup" })
  *
@@ -40,7 +48,7 @@
 export type { QueueStrategy, ResolvedConfig, TrackerConfig } from "./config.js";
 export { defaults, resolveConfig } from "./config.js";
 // Event
-export type { Event, EventOptions } from "./event.js";
+export type { Event, EventMap, EventOptions, EventUnion } from "./event.js";
 export { createEvent } from "./event.js";
 // Logger
 export type { Logger, LogLevel } from "./logger.js";

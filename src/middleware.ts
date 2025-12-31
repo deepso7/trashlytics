@@ -3,39 +3,58 @@
  *
  * @since 1.0.0
  */
-import type { Event } from "./event.js";
+import type { Event, EventMap, EventUnion } from "./event.js";
 
 /**
  * Middleware function that transforms or filters events.
  * Return the transformed event, or null to filter it out.
+ *
+ * @template E - Event map type. Defaults to `EventMap` for reusable middleware.
  */
-export type Middleware = (event: Event) => Event | null;
+export type Middleware<E extends EventMap = EventMap> = (
+  event: Event<EventUnion<E>>
+) => Event<EventUnion<E>> | null;
 
 /**
  * Identity middleware - passes events through unchanged.
+ *
+ * @example
+ * ```ts
+ * type MyEvents = { click: { x: number } }
+ * const mw = identity<MyEvents>()
+ * ```
  */
-export const identity: Middleware = (event) => event;
+export const identity =
+  <E extends EventMap = EventMap>(): Middleware<E> =>
+  (event) =>
+    event;
 
 /**
  * Compose multiple middlewares into one.
  * Middlewares are applied left to right.
  * If any middleware returns null, the event is filtered out.
  *
+ * @template E - Event map type. Defaults to `EventMap` for reusable middleware.
+ *
  * @example
  * ```ts
- * const middleware = compose(
+ * type MyEvents = { click: { buttonId: string } }
+ *
+ * const middleware = compose<MyEvents>(
  *   addMetadata({ appVersion: "1.0.0" }),
  *   filter((e) => e.name !== "internal"),
  * )
  * ```
  */
-export const compose = (...middlewares: readonly Middleware[]): Middleware => {
+export const compose = <E extends EventMap = EventMap>(
+  ...middlewares: readonly Middleware<E>[]
+): Middleware<E> => {
   if (middlewares.length === 0) {
-    return identity;
+    return identity<E>();
   }
 
   return (event) => {
-    let current: Event | null = event;
+    let current: Event<EventUnion<E>> | null = event;
     for (const mw of middlewares) {
       if (current === null) {
         return null;
@@ -50,6 +69,8 @@ export const compose = (...middlewares: readonly Middleware[]): Middleware => {
  * Filter events based on a predicate.
  * Events that don't match the predicate are dropped.
  *
+ * @template E - Event map type. Defaults to `EventMap` for reusable middleware.
+ *
  * @example
  * ```ts
  * // Only track production events
@@ -59,12 +80,16 @@ export const compose = (...middlewares: readonly Middleware[]): Middleware => {
  * const skipInternal = filter((e) => !e.name.startsWith("_"))
  * ```
  */
-export const filter = (predicate: (event: Event) => boolean): Middleware => {
+export const filter = <E extends EventMap = EventMap>(
+  predicate: (event: Event<EventUnion<E>>) => boolean
+): Middleware<E> => {
   return (event) => (predicate(event) ? event : null);
 };
 
 /**
  * Add static metadata to events.
+ *
+ * @template E - Event map type. Defaults to `EventMap` for reusable middleware.
  *
  * @example
  * ```ts
@@ -74,7 +99,9 @@ export const filter = (predicate: (event: Event) => boolean): Middleware => {
  * })
  * ```
  */
-export const addMetadata = (metadata: Record<string, unknown>): Middleware => {
+export const addMetadata = <E extends EventMap = EventMap>(
+  metadata: Record<string, unknown>
+): Middleware<E> => {
   return (event) => ({
     ...event,
     metadata: { ...event.metadata, ...metadata },
@@ -84,6 +111,8 @@ export const addMetadata = (metadata: Record<string, unknown>): Middleware => {
 /**
  * Add metadata dynamically based on the event.
  *
+ * @template E - Event map type. Defaults to `EventMap` for reusable middleware.
+ *
  * @example
  * ```ts
  * const addTimezone = addMetadataFrom(() => ({
@@ -91,9 +120,9 @@ export const addMetadata = (metadata: Record<string, unknown>): Middleware => {
  * }))
  * ```
  */
-export const addMetadataFrom = (
-  fn: (event: Event) => Record<string, unknown>
-): Middleware => {
+export const addMetadataFrom = <E extends EventMap = EventMap>(
+  fn: (event: Event<EventUnion<E>>) => Record<string, unknown>
+): Middleware<E> => {
   return (event) => ({
     ...event,
     metadata: { ...event.metadata, ...fn(event) },
@@ -103,13 +132,17 @@ export const addMetadataFrom = (
 /**
  * Transform the event name.
  *
+ * @template E - Event map type. Defaults to `EventMap` for reusable middleware.
+ *
  * @example
  * ```ts
  * // Prefix all event names
  * const prefixed = mapName((name) => `app.${name}`)
  * ```
  */
-export const mapName = (fn: (name: string) => string): Middleware => {
+export const mapName = <E extends EventMap = EventMap>(
+  fn: (name: string) => string
+): Middleware<E> => {
   return (event) => ({
     ...event,
     name: fn(event.name),
@@ -118,6 +151,8 @@ export const mapName = (fn: (name: string) => string): Middleware => {
 
 /**
  * Transform the event payload.
+ *
+ * @template E - Event map type. Defaults to `EventMap` for reusable middleware.
  *
  * @example
  * ```ts
@@ -128,15 +163,19 @@ export const mapName = (fn: (name: string) => string): Middleware => {
  * }))
  * ```
  */
-export const mapPayload = <T, U>(fn: (payload: T) => U): Middleware => {
+export const mapPayload = <E extends EventMap = EventMap>(
+  fn: (payload: EventUnion<E>) => EventUnion<E>
+): Middleware<E> => {
   return (event) => ({
     ...event,
-    payload: fn(event.payload as T),
+    payload: fn(event.payload),
   });
 };
 
 /**
  * Transform the entire event.
+ *
+ * @template E - Event map type. Defaults to `EventMap` for reusable middleware.
  *
  * @example
  * ```ts
@@ -146,7 +185,9 @@ export const mapPayload = <T, U>(fn: (payload: T) => U): Middleware => {
  * }))
  * ```
  */
-export const map = (fn: (event: Event) => Event): Middleware => {
+export const map = <E extends EventMap = EventMap>(
+  fn: (event: Event<EventUnion<E>>) => Event<EventUnion<E>>
+): Middleware<E> => {
   return (event) => fn(event);
 };
 
@@ -154,12 +195,16 @@ export const map = (fn: (event: Event) => Event): Middleware => {
  * Tap into the event stream for side effects.
  * Does not modify the event.
  *
+ * @template E - Event map type. Defaults to `EventMap` for reusable middleware.
+ *
  * @example
  * ```ts
  * const logger = tap((event) => console.log("Tracking:", event.name))
  * ```
  */
-export const tap = (fn: (event: Event) => void): Middleware => {
+export const tap = <E extends EventMap = EventMap>(
+  fn: (event: Event<EventUnion<E>>) => void
+): Middleware<E> => {
   return (event) => {
     fn(event);
     return event;

@@ -3,7 +3,7 @@
  *
  * @since 1.0.0
  */
-import type { Event } from "./event.js";
+import type { Event, EventMap, EventUnion } from "./event.js";
 import type { Logger } from "./logger.js";
 import { consoleLogger } from "./logger.js";
 import type { Transport, TransportError } from "./transport.js";
@@ -19,10 +19,12 @@ export type QueueStrategy = "bounded" | "dropping" | "sliding";
 
 /**
  * Configuration for the Tracker.
+ *
+ * @template E - Event map type for typed events.
  */
-export interface TrackerConfig {
+export interface TrackerConfig<E extends EventMap> {
   /** Array of transports to send events to */
-  readonly transports: readonly Transport[];
+  readonly transports: readonly Transport<E>[];
 
   /**
    * Custom ID generator for events.
@@ -81,7 +83,10 @@ export interface TrackerConfig {
    * Callback for transport errors.
    * Called after all retries are exhausted.
    */
-  readonly onError?: (error: TransportError, events: readonly Event[]) => void;
+  readonly onError?: (
+    error: TransportError,
+    events: readonly Event<EventUnion<E>>[]
+  ) => void;
 
   /**
    * Custom logger for library output.
@@ -106,18 +111,24 @@ export const defaults = {
 
 /**
  * Resolved configuration with all defaults applied.
+ *
+ * @template E - Event map type for typed events.
  */
-export type ResolvedConfig = Required<
-  Omit<TrackerConfig, "generateId" | "metadata" | "onError" | "logger">
+export type ResolvedConfig<E extends EventMap> = Required<
+  Omit<TrackerConfig<E>, "generateId" | "metadata" | "onError" | "logger">
 > &
-  Pick<TrackerConfig, "generateId" | "metadata" | "onError"> & {
+  Pick<TrackerConfig<E>, "generateId" | "metadata" | "onError"> & {
     readonly logger: Logger;
   };
 
 /**
  * Resolves a partial config with defaults.
+ *
+ * @template E - Event map type for typed events.
  */
-export const resolveConfig = (config: TrackerConfig): ResolvedConfig => {
+export const resolveConfig = <E extends EventMap>(
+  config: TrackerConfig<E>
+): ResolvedConfig<E> => {
   return {
     batchSize: config.batchSize ?? defaults.batchSize,
     flushIntervalMs: config.flushIntervalMs ?? defaults.flushIntervalMs,
