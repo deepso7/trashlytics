@@ -1,0 +1,5 @@
+---
+"trashlytics": patch
+---
+
+Update readme

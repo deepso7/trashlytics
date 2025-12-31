@@ -28,8 +28,14 @@ yarn add trashlytics effect
 ```typescript
 import { createTracker, TransportError } from "trashlytics"
 
-// 1. Create a tracker with your transport
-const tracker = createTracker({
+// 1. Define your event types
+type MyEvents = {
+  page_view: { page: string; referrer?: string }
+  button_click: { buttonId: string }
+}
+
+// 2. Create a typed tracker with your transport
+const tracker = createTracker<MyEvents>({
   transports: [{
     name: "http",
     send: async (events) => {
@@ -51,18 +57,18 @@ const tracker = createTracker({
   flushIntervalMs: 5000,
 })
 
-// 2. Track events (fire-and-forget)
+// 3. Track events with full type safety (fire-and-forget)
 tracker.track("page_view", { page: "/home" })
 tracker.track("button_click", { buttonId: "signup" })
 
-// 3. Graceful shutdown when done
+// 4. Graceful shutdown when done
 await tracker.shutdown()
 ```
 
 ## Configuration
 
 ```typescript
-import { createTracker } from "trashlytics"
+import { createTracker, consoleLogger, noopLogger } from "trashlytics"
 
 const tracker = createTracker({
   // Required: array of transports
@@ -91,6 +97,9 @@ const tracker = createTracker({
     appVersion: "1.0.0",
     environment: "production",
   },
+
+  // Logging (default: consoleLogger)
+  logger: consoleLogger,      // Use noopLogger to silence output
 
   // Error Callback (called after all retries exhausted)
   onError: (error, events) => {
@@ -273,6 +282,54 @@ class TransportError extends Error {
   transport: string   // Transport name
   retryable: boolean  // Whether to retry
 }
+```
+
+### Logger
+
+```typescript
+interface Logger {
+  debug: (message: string, ...args: unknown[]) => void
+  info: (message: string, ...args: unknown[]) => void
+  warn: (message: string, ...args: unknown[]) => void
+  error: (message: string, ...args: unknown[]) => void
+}
+```
+
+## Custom Logging
+
+Control library logging output:
+
+```typescript
+import { createTracker, consoleLogger, noopLogger, createMinLevelLogger } from "trashlytics"
+
+// Default: logs to console
+const tracker = createTracker({
+  transports,
+  logger: consoleLogger,
+})
+
+// Silence all logging
+const silentTracker = createTracker({
+  transports,
+  logger: noopLogger,
+})
+
+// Only log warnings and errors
+const warnTracker = createTracker({
+  transports,
+  logger: createMinLevelLogger("warn"),
+})
+
+// Custom logger integration
+const customTracker = createTracker({
+  transports,
+  logger: {
+    debug: (msg, ...args) => myLogger.debug("[analytics]", msg, ...args),
+    info: (msg, ...args) => myLogger.info("[analytics]", msg, ...args),
+    warn: (msg, ...args) => myLogger.warn("[analytics]", msg, ...args),
+    error: (msg, ...args) => myLogger.error("[analytics]", msg, ...args),
+  },
+})
 ```
 
 ## Browser Tips
