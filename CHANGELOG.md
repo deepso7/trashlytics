@@ -1,5 +1,12 @@
 # trashlytics
 
+## 0.1.1
+
+### Patch Changes
+
+- 615c1f8: Update readme
+- 6efec53: bug fixes
+
 ## 0.1.0
 
 ### Minor Changes
