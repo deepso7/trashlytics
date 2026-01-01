@@ -208,7 +208,7 @@ const createRuntime = <E extends EventMap>(
     // Handle failures
     for (const result of results) {
       if (result.status === "rejected") {
-        const error = result.reason as TransportError;
+        const error = extractTransportError(result.reason);
         if (config.onError) {
           config.onError(error, events);
         }
@@ -217,16 +217,16 @@ const createRuntime = <E extends EventMap>(
     }
   };
 
-  // Start background batch loop
+  // Use a simpler approach: batch on flush interval only, no blocking takeBetween
+  // This avoids race conditions between the batch loop and manual flush/shutdown
   const batchLoop = Effect.gen(function* () {
     yield* Effect.forever(
       Effect.gen(function* () {
-        const events = yield* Effect.race(
-          Queue.takeBetween(queue, config.batchSize, config.batchSize),
-          Effect.sleep(Duration.millis(config.flushIntervalMs)).pipe(
-            Effect.zipRight(Queue.takeUpTo(queue, config.batchSize))
-          )
-        );
+        // Wait for the flush interval
+        yield* Effect.sleep(Duration.millis(config.flushIntervalMs));
+
+        // Take up to batchSize items (non-blocking)
+        const events = yield* Queue.takeUpTo(queue, config.batchSize);
 
         if (events.length > 0) {
           yield* Effect.tryPromise({
@@ -244,13 +244,16 @@ const createRuntime = <E extends EventMap>(
 
   return {
     offer: (event) => {
-      Effect.runFork(Queue.offer(queue, event));
+      // Use unsafeOffer for synchronous, non-blocking offer
+      // This avoids race conditions with flush/shutdown
+      Queue.unsafeOffer(queue, event);
     },
 
     offerAsync: (event) =>
       Effect.runPromise(Queue.offer(queue, event)).then(() => undefined),
 
     flush: async () => {
+      // Take all available events from the queue
       const events = await Effect.runPromise(Queue.takeAll(queue));
       if (events.length > 0) {
         await dispatch([...events]);
@@ -316,4 +319,32 @@ const dispatchToTransport = async <E extends EventMap>(
   );
 
   await Effect.runPromise(effect);
+};
+
+// Symbol used by Effect to store the Cause in FiberFailure
+const FiberFailureCauseSymbol = Symbol.for("effect/Runtime/FiberFailure/Cause");
+
+// Extract TransportError from Effect's FiberFailure wrapper
+const extractTransportError = (reason: unknown): TransportError => {
+  // Direct TransportError
+  if (reason instanceof TransportError) {
+    return reason;
+  }
+
+  // Effect's FiberFailure stores the Cause under a symbol
+  // The Cause has _tag: "Fail" and the error is in the "error" property
+  if (reason && typeof reason === "object") {
+    // biome-ignore lint/suspicious/noExplicitAny: need to access symbol property
+    const cause = (reason as any)[FiberFailureCauseSymbol];
+    if (cause?.error instanceof TransportError) {
+      return cause.error;
+    }
+  }
+
+  // Fallback: create a generic TransportError
+  return new TransportError({
+    transport: "unknown",
+    reason: String(reason),
+    retryable: false,
+  });
 };
