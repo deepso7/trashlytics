@@ -1,4 +1,4 @@
-import { type AnalyticsConfig, resolveConfig } from "./config";
+import type { AnalyticsConfig } from "./config";
 
 export interface Analytics<T = unknown> {
   /**
@@ -27,9 +27,4 @@ export interface Analytics<T = unknown> {
 
 export const createAnalytics = <T = unknown>(
   config: AnalyticsConfig<T>
-): Analytics<T> => {
-  const resolved = resolveConfig(config);
-
-  const generateId = config.generateId ?? defaultGenerateId;
-  const globalMetadata = config.metadata ?? {};
-};
+): Analytics<T> => {};
