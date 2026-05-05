@@ -77,12 +77,7 @@ export function createTracker<const Events extends EventsMap>(
           await options.sink(batch);
         },
         catch: (cause) => new SinkDeliveryError({ cause }),
-      }).pipe(
-        Effect.catch((error) => {
-          options.onError?.(error, batch);
-          return Effect.fail(error);
-        })
-      ),
+      }),
     batchSize: options.batchSize,
     bufferSize: options.bufferSize,
     retries: options.retries,
@@ -97,7 +92,12 @@ export function createTracker<const Events extends EventsMap>(
 
   const flush = async () => {
     clearFlushTimer();
-    await Effect.runPromise(tracker.flush());
+    try {
+      await Effect.runPromise(tracker.flush());
+    } catch (error) {
+      options.onError?.(error);
+      throw error;
+    }
   };
 
   const scheduleFlush = () => {
