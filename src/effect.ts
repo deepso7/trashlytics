@@ -142,20 +142,19 @@ export function createTracker<
   const queue: Array<TrackedEvent<Events>> = [];
   let closed = false;
 
-  const flush = (): Effect.Effect<void, Error, Requirements> =>
-    Effect.gen(function*() {
-      while (queue.length > 0) {
-        const batch = queue.splice(0, batchSize);
+  const flush = Effect.fn("trashlytics.flush")(function*() {
+    while (queue.length > 0) {
+      const batch = queue.splice(0, batchSize);
 
-        yield* sendWithRetries(options.sink, batch, retryOptions);
-      }
-    });
+      yield* sendWithRetries(options.sink, batch, retryOptions);
+    }
+  });
 
   const makeEvent = <Key extends keyof Events & string>(
     key: Key,
     payload: EventPayload<Events[Key]>,
     trackOptions?: TrackOptions
-  ): Effect.Effect<TrackedEvent<Events, Key>, Schema.SchemaError | UnknownEventError> => {
+  ) => {
     const definition = options.events[key];
 
     if (definition === undefined) {
@@ -174,8 +173,7 @@ export function createTracker<
   };
 
   return {
-    track: (key, payload, trackOptions) =>
-      Effect.gen(function*() {
+    track: Effect.fn("trashlytics.track")(function*(key, payload, trackOptions) {
         if (closed) {
           return yield* new TrackerShutdownError();
         }
@@ -193,8 +191,7 @@ export function createTracker<
         }
       }),
 
-    trackNow: (key, payload, trackOptions) =>
-      Effect.gen(function*() {
+    trackNow: Effect.fn("trashlytics.trackNow")(function*(key, payload, trackOptions) {
         if (closed) {
           return yield* new TrackerShutdownError();
         }
@@ -206,8 +203,7 @@ export function createTracker<
 
     flush,
 
-    shutdown: () =>
-      Effect.gen(function*() {
+    shutdown: Effect.fn("trashlytics.shutdown")(function*() {
         closed = true;
         yield* flush();
       }),
@@ -259,7 +255,7 @@ export function sendWithRetries<Events extends EventsMap, Error, Requirements>(
   sink: Sink<Events, Error, Requirements>,
   batch: ReadonlyArray<TrackedEvent<Events>>,
   retries: Required<RetryOptions>
-): Effect.Effect<void, Error, Requirements> {
+) {
   return Effect.retry(sink(batch), {
     times: retries.attempts,
     schedule: Schedule.exponential(
@@ -269,7 +265,7 @@ export function sendWithRetries<Events extends EventsMap, Error, Requirements>(
   });
 }
 
-export function normalizeRetries(retries: number | RetryOptions | undefined): Required<RetryOptions> {
+export function normalizeRetries(retries: number | RetryOptions | undefined) {
   if (typeof retries === "number") {
     return { attempts: retries, delay: 250, factor: 2 };
   }
