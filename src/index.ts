@@ -34,7 +34,7 @@ export type Sink<Events extends EffectEventsMap> = (
 
 export type TrackerOptions<Events extends EffectEventsMap> = Omit<
   EffectTrackerOptions<Events, SinkDeliveryError, never>,
-  "sink"
+  "onError" | "sink"
 > & {
   readonly sink: Sink<Events>;
   readonly flushInterval?: number;
@@ -74,6 +74,7 @@ export function createTracker<const Events extends EffectEventsMap>(
     batchSize: options.batchSize,
     bufferSize: options.bufferSize,
     flushInterval: options.flushInterval,
+    onError: options.onError,
     retries: options.retries,
   });
 

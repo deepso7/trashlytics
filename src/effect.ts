@@ -86,6 +86,7 @@ export interface TrackerOptions<
   readonly bufferSize?: number;
   readonly events: Events;
   readonly flushInterval?: number;
+  readonly onError?: (error: unknown) => void;
   readonly retries?: number | RetryOptions;
   readonly sink: Sink<Events, Error, Requirements>;
 }
@@ -223,6 +224,11 @@ export function createTracker<
         Schedule.duration(Duration.millis(flushInterval))
       ).pipe(
         Effect.andThen(drainQueue()),
+        Effect.tapError((error) =>
+          Effect.sync(() => {
+            options.onError?.(error);
+          })
+        ),
         Effect.ignore,
         Effect.forever,
         Effect.forkDetach
