@@ -1,4 +1,13 @@
-import { Duration, Effect, Schedule, Schema } from "effect";
+import {
+  Duration,
+  Effect,
+  Fiber,
+  Option,
+  Queue,
+  Schedule,
+  Schema,
+  Semaphore,
+} from "effect";
 
 type AnySchema = Schema.Decoder<unknown, never>;
 type EventFields = Schema.Struct.Fields;
@@ -76,6 +85,7 @@ export interface TrackerOptions<
   readonly batchSize?: number;
   readonly bufferSize?: number;
   readonly events: Events;
+  readonly flushInterval?: number;
   readonly retries?: number | RetryOptions;
   readonly sink: Sink<Events, Error, Requirements>;
 }
@@ -147,16 +157,89 @@ export function createTracker<
 ): Tracker<Events, Error, Requirements> {
   const batchSize = options.batchSize ?? 20;
   const bufferSize = options.bufferSize ?? 1000;
+  const flushInterval = options.flushInterval ?? 5000;
   const retryOptions = normalizeRetries(options.retries);
-  const queue: TrackedEvent<Events>[] = [];
+  const queue = Effect.runSync(
+    Queue.dropping<TrackedEvent<Events>>(bufferSize)
+  );
+  const flushSemaphore = Semaphore.makeUnsafe(1);
+  let intervalFiber: Fiber.Fiber<never> | undefined;
   let closed = false;
 
-  const flush = Effect.fn("trashlytics.flush")(function* () {
-    while (queue.length > 0) {
-      const batch = queue.splice(0, batchSize);
-
-      yield* sendWithRetries(options.sink, batch, retryOptions);
+  const stopFlushInterval = Effect.fn("trashlytics.stopFlushInterval")(
+    function* () {
+      if (intervalFiber !== undefined) {
+        const fiber = intervalFiber;
+        intervalFiber = undefined;
+        yield* Fiber.interrupt(fiber);
+      }
     }
+  );
+
+  const takeBatch = Effect.fn("trashlytics.takeBatch")(function* () {
+    const batch: TrackedEvent<Events>[] = [];
+
+    while (batch.length < batchSize) {
+      const item = yield* Queue.poll(queue);
+
+      if (Option.isNone(item)) {
+        break;
+      }
+
+      batch.push(item.value);
+    }
+
+    return batch;
+  });
+
+  const drainQueue = Effect.fn("trashlytics.drainQueue")(function* () {
+    yield* flushSemaphore.withPermit(
+      Effect.gen(function* () {
+        while (true) {
+          const batch = yield* takeBatch();
+
+          if (batch.length === 0) {
+            break;
+          }
+
+          yield* sendWithRetries(options.sink, batch, retryOptions);
+        }
+      })
+    );
+  });
+
+  const flush = Effect.fn("trashlytics.flush")(function* () {
+    yield* drainQueue();
+  });
+
+  const ensureFlushInterval = Effect.fn("trashlytics.ensureFlushInterval")(
+    function* () {
+      if (closed || flushInterval <= 0 || intervalFiber !== undefined) {
+        return;
+      }
+
+      intervalFiber = yield* Effect.schedule(
+        Effect.void,
+        Schedule.duration(Duration.millis(flushInterval))
+      ).pipe(
+        Effect.andThen(drainQueue()),
+        Effect.ignore,
+        Effect.forever,
+        Effect.forkDetach
+      );
+    }
+  );
+
+  const flushIfBatchSizeReached = Effect.fn(
+    "trashlytics.flushIfBatchSizeReached"
+  )(function* () {
+    const queueSize = yield* Queue.size(queue);
+
+    if (queueSize < batchSize) {
+      return;
+    }
+
+    yield* drainQueue();
   });
 
   const makeEvent = <Key extends keyof Events & string>(
@@ -193,16 +276,14 @@ export function createTracker<
         }
 
         const trackedEvent = yield* makeEvent(key, payload, trackOptions);
+        const wasQueued = yield* Queue.offer(queue, trackedEvent);
 
-        if (queue.length >= bufferSize) {
+        if (!wasQueued) {
           return yield* new BufferFullError({ size: bufferSize });
         }
 
-        queue.push(trackedEvent);
-
-        if (queue.length >= batchSize) {
-          yield* flush();
-        }
+        yield* ensureFlushInterval();
+        yield* flushIfBatchSizeReached();
       }
     ),
 
@@ -222,6 +303,7 @@ export function createTracker<
 
     shutdown: Effect.fn("trashlytics.shutdown")(function* () {
       closed = true;
+      yield* stopFlushInterval();
       yield* flush();
     }),
   };

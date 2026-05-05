@@ -65,4 +65,31 @@ describe("effect tracker", () => {
 
     expect(attempts).toBe(3);
   });
+
+  it("flushes queued events after the flush interval", async () => {
+    const batches: (readonly TrackedEvent<typeof events>[])[] = [];
+    const tracker = createTracker({
+      events,
+      flushInterval: 1,
+      sink: (batch) =>
+        Effect.sync(() => {
+          batches.push([...batch]);
+        }),
+    });
+
+    await Effect.runPromise(
+      tracker.track("signup", { userId: "u_1", plan: "free" })
+    );
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    await Effect.runPromise(tracker.shutdown());
+
+    expect(batches).toHaveLength(1);
+    expect(batches[0]).toMatchObject([
+      {
+        key: "signup",
+        name: "user.signup",
+        payload: { userId: "u_1", plan: "free" },
+      },
+    ]);
+  });
 });
