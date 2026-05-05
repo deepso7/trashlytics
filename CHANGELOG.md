@@ -1,5 +1,11 @@
 # trashlytics
 
+## 0.1.2
+
+### Patch Changes
+
+- b3a4afe: rework
+
 ## 0.1.1
 
 ### Patch Changes
