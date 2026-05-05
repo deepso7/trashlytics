@@ -195,17 +195,19 @@ export function createTracker<
 
   const drainQueue = Effect.fn("trashlytics.drainQueue")(function* () {
     yield* flushSemaphore.withPermit(
-      Effect.gen(function* () {
-        while (true) {
-          const batch = yield* takeBatch();
+      Effect.uninterruptible(
+        Effect.gen(function* () {
+          while (true) {
+            const batch = yield* takeBatch();
 
-          if (batch.length === 0) {
-            break;
+            if (batch.length === 0) {
+              break;
+            }
+
+            yield* sendWithRetries(options.sink, batch, retryOptions);
           }
-
-          yield* sendWithRetries(options.sink, batch, retryOptions);
-        }
-      })
+        })
+      )
     );
   });
 

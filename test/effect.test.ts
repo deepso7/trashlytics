@@ -92,4 +92,48 @@ describe("effect tracker", () => {
       },
     ]);
   });
+
+  it("does not interrupt an in-flight interval delivery on shutdown", async () => {
+    const batches: (readonly TrackedEvent<typeof events>[])[] = [];
+    let deliveryStarted!: () => void;
+    let resumeDelivery!: (effect: Effect.Effect<void>) => void;
+    let shutdownCompleted = false;
+    let deliveryInterrupted = false;
+    const deliveryStartedPromise = new Promise<void>((resolve) => {
+      deliveryStarted = resolve;
+    });
+    const tracker = createTracker({
+      events,
+      flushInterval: 1,
+      sink: (batch) =>
+        Effect.callback<void>((resume) => {
+          batches.push([...batch]);
+          resumeDelivery = resume;
+          deliveryStarted();
+
+          return Effect.sync(() => {
+            deliveryInterrupted = true;
+          });
+        }),
+    });
+
+    await Effect.runPromise(
+      tracker.track("signup", { userId: "u_1", plan: "free" })
+    );
+    await deliveryStartedPromise;
+
+    const shutdownPromise = Effect.runPromise(tracker.shutdown()).then(() => {
+      shutdownCompleted = true;
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(shutdownCompleted).toBe(false);
+    expect(deliveryInterrupted).toBe(false);
+
+    resumeDelivery(Effect.void);
+    await shutdownPromise;
+
+    expect(deliveryInterrupted).toBe(false);
+    expect(batches).toHaveLength(1);
+  });
 });
