@@ -1,5 +1,11 @@
 # trashlytics
 
+## 0.2.1
+
+### Patch Changes
+
+- dea55f6: Use Effect queues, schedules, and semaphores for tracker buffering and interval flushing.
+
 ## 0.2.0
 
 ### Minor Changes
