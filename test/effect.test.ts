@@ -1,6 +1,11 @@
 import { Effect, Schema } from "effect";
 import { describe, expect, it } from "vitest";
-import { createTracker, event, type TrackedEvent } from "../src/effect";
+import {
+  createTracker,
+  event,
+  SinkDeliveryError,
+  type TrackedEvent,
+} from "../src/effect";
 
 const events = {
   signup: event("user.signup", {
@@ -48,8 +53,8 @@ describe("effect tracker", () => {
         }).pipe(
           Effect.andThen(() =>
             attempts < 3
-              ? Effect.fail(new Error("not yet"))
-              : Effect.succeed(undefined)
+              ? Effect.fail(new SinkDeliveryError({ cause: "not yet" }))
+              : Effect.void
           )
         ),
     });

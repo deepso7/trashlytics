@@ -257,7 +257,7 @@ export function httpSink<Events extends EventsMap>(
           ...options,
           headers,
           method: options.method ?? "POST",
-          body: JSON.stringify(batch),
+          body: Schema.encodeUnknownSync(Schema.UnknownFromJsonString)(batch),
         });
 
         if (!response.ok) {

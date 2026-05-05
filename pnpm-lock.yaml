@@ -7,10 +7,6 @@ settings:
 importers:
 
   .:
-    dependencies:
-      effect:
-        specifier: 4.0.0-beta.60
-        version: 4.0.0-beta.60
     devDependencies:
       '@biomejs/biome':
         specifier: 2.4.14
@@ -27,6 +23,9 @@ importers:
       '@types/node':
         specifier: 25.6.0
         version: 25.6.0
+      effect:
+        specifier: 4.0.0-beta.60
+        version: 4.0.0-beta.60
       rolldown:
         specifier: 1.0.0-rc.18
         version: 1.0.0-rc.18
