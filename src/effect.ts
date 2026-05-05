@@ -164,16 +164,21 @@ export function createTracker<
     Queue.dropping<TrackedEvent<Events>>(bufferSize)
   );
   const flushSemaphore = Semaphore.makeUnsafe(1);
+  const intervalSemaphore = Semaphore.makeUnsafe(1);
   let intervalFiber: Fiber.Fiber<never> | undefined;
   let closed = false;
 
   const stopFlushInterval = Effect.fn("trashlytics.stopFlushInterval")(
     function* () {
-      if (intervalFiber !== undefined) {
-        const fiber = intervalFiber;
-        intervalFiber = undefined;
-        yield* Fiber.interrupt(fiber);
-      }
+      yield* intervalSemaphore.withPermit(
+        Effect.gen(function* () {
+          if (intervalFiber !== undefined) {
+            const fiber = intervalFiber;
+            intervalFiber = undefined;
+            yield* Fiber.interrupt(fiber);
+          }
+        })
+      );
     }
   );
 
@@ -217,23 +222,29 @@ export function createTracker<
 
   const ensureFlushInterval = Effect.fn("trashlytics.ensureFlushInterval")(
     function* () {
-      if (closed || flushInterval <= 0 || intervalFiber !== undefined) {
-        return;
-      }
+      yield* intervalSemaphore.withPermit(
+        Effect.uninterruptible(
+          Effect.gen(function* () {
+            if (closed || flushInterval <= 0 || intervalFiber !== undefined) {
+              return;
+            }
 
-      intervalFiber = yield* Effect.schedule(
-        Effect.void,
-        Schedule.duration(Duration.millis(flushInterval))
-      ).pipe(
-        Effect.andThen(drainQueue()),
-        Effect.tapError((error) =>
-          Effect.sync(() => {
-            options.onError?.(error);
+            intervalFiber = yield* Effect.schedule(
+              Effect.void,
+              Schedule.duration(Duration.millis(flushInterval))
+            ).pipe(
+              Effect.andThen(drainQueue()),
+              Effect.tapError((error) =>
+                Effect.sync(() => {
+                  options.onError?.(error);
+                })
+              ),
+              Effect.ignore,
+              Effect.forever,
+              Effect.forkDetach
+            );
           })
-        ),
-        Effect.ignore,
-        Effect.forever,
-        Effect.forkDetach
+        )
       );
     }
   );
