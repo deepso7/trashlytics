@@ -28,15 +28,13 @@ export type {
 
 export const event = effectEvent;
 
-type Timer = ReturnType<typeof setTimeout>;
-
 export type Sink<Events extends EffectEventsMap> = (
   batch: readonly EffectTrackedEvent<Events>[]
 ) => void | Promise<void>;
 
 export type TrackerOptions<Events extends EffectEventsMap> = Omit<
   EffectTrackerOptions<Events, SinkDeliveryError, never>,
-  "sink"
+  "onError" | "sink"
 > & {
   readonly sink: Sink<Events>;
   readonly flushInterval?: number;
@@ -64,9 +62,6 @@ export interface Tracker<Events extends EffectEventsMap> {
 export function createTracker<const Events extends EffectEventsMap>(
   options: TrackerOptions<Events>
 ): Tracker<Events> {
-  const flushInterval = options.flushInterval ?? 5000;
-  let timer: Timer | undefined;
-
   const tracker = createEffectTracker({
     events: options.events,
     sink: (batch) =>
@@ -78,18 +73,12 @@ export function createTracker<const Events extends EffectEventsMap>(
       }),
     batchSize: options.batchSize,
     bufferSize: options.bufferSize,
+    flushInterval: options.flushInterval,
+    onError: options.onError,
     retries: options.retries,
   });
 
-  const clearFlushTimer = () => {
-    if (timer !== undefined) {
-      clearTimeout(timer);
-      timer = undefined;
-    }
-  };
-
   const flush = async () => {
-    clearFlushTimer();
     try {
       await Effect.runPromise(tracker.flush());
     } catch (error) {
@@ -98,22 +87,11 @@ export function createTracker<const Events extends EffectEventsMap>(
     }
   };
 
-  const scheduleFlush = () => {
-    if (flushInterval <= 0 || timer !== undefined) {
-      return;
-    }
-
-    timer = setTimeout(() => {
-      timer = undefined;
-      flush().catch(() => undefined);
-    }, flushInterval);
-  };
-
   return {
     track: (key, payload, trackOptions) => {
-      Effect.runPromise(tracker.track(key, payload, trackOptions))
-        .then(scheduleFlush)
-        .catch((error) => options.onError?.(error));
+      Effect.runPromise(tracker.track(key, payload, trackOptions)).catch(
+        (error) => options.onError?.(error)
+      );
     },
 
     trackNow: (key, payload, trackOptions) =>
@@ -122,7 +100,6 @@ export function createTracker<const Events extends EffectEventsMap>(
     flush,
 
     shutdown: async () => {
-      clearFlushTimer();
       await Effect.runPromise(tracker.shutdown());
     },
   };

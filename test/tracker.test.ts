@@ -161,4 +161,22 @@ describe("tracker", () => {
 
     expect(batches).toHaveLength(1);
   });
+
+  it("reports interval flush failures", async () => {
+    const errors: unknown[] = [];
+    const tracker = createTracker({
+      events,
+      flushInterval: 1,
+      onError: (error) => errors.push(error),
+      sink: () => {
+        throw new Error("not yet");
+      },
+    });
+
+    tracker.track("signup", { userId: "u_1", plan: "free" });
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    await tracker.shutdown();
+
+    expect(errors).toHaveLength(1);
+  });
 });
