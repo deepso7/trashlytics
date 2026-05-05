@@ -1,5 +1,11 @@
 # trashlytics
 
+## 0.1.4
+
+### Patch Changes
+
+- 7104765: effect to peerdep
+
 ## 0.1.3
 
 ### Patch Changes
