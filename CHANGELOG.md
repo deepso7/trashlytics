@@ -1,5 +1,11 @@
 # trashlytics
 
+## 0.1.3
+
+### Patch Changes
+
+- 2c86433: remove zod dep
+
 ## 0.1.2
 
 ### Patch Changes
