@@ -1,26 +1,20 @@
 import { Effect } from "effect";
+import type {
+  EventPayload as EffectEventPayload,
+  EventsMap as EffectEventsMap,
+  HttpSinkOptions as EffectHttpSinkOptions,
+  TrackedEvent as EffectTrackedEvent,
+  TrackerOptions as EffectTrackerOptions,
+  TrackOptions as EffectTrackOptions,
+} from "./effect";
 import {
-  consoleSink as effectConsoleSink,
   createTracker as createEffectTracker,
-  event,
+  consoleSink as effectConsoleSink,
+  event as effectEvent,
   httpSink as effectHttpSink,
   SinkDeliveryError,
 } from "./effect";
-import type {
-  EventDefinition,
-  EventMeta,
-  EventPayload,
-  EventsMap,
-  HttpSinkOptions,
-  RetryOptions,
-  TrackOptions,
-  TrackedEvent,
-  TrackerOptions as EffectTrackerOptions,
-} from "./effect";
 
-type Timer = ReturnType<typeof setTimeout>;
-
-export { event };
 export type {
   EventDefinition,
   EventMeta,
@@ -28,15 +22,19 @@ export type {
   EventsMap,
   HttpSinkOptions,
   RetryOptions,
-  TrackOptions,
   TrackedEvent,
-};
+  TrackOptions,
+} from "./effect";
 
-export type Sink<Events extends EventsMap> = (
-  batch: ReadonlyArray<TrackedEvent<Events>>
+export const event = effectEvent;
+
+type Timer = ReturnType<typeof setTimeout>;
+
+export type Sink<Events extends EffectEventsMap> = (
+  batch: readonly EffectTrackedEvent<Events>[]
 ) => void | Promise<void>;
 
-export type TrackerOptions<Events extends EventsMap> = Omit<
+export type TrackerOptions<Events extends EffectEventsMap> = Omit<
   EffectTrackerOptions<Events, SinkDeliveryError, never>,
   "sink"
 > & {
@@ -44,26 +42,26 @@ export type TrackerOptions<Events extends EventsMap> = Omit<
   readonly flushInterval?: number;
   readonly onError?: (
     error: unknown,
-    batch?: ReadonlyArray<TrackedEvent<Events>>
+    batch?: readonly EffectTrackedEvent<Events>[]
   ) => void;
 };
 
-export type Tracker<Events extends EventsMap> = {
+export interface Tracker<Events extends EffectEventsMap> {
+  readonly flush: () => Promise<void>;
+  readonly shutdown: () => Promise<void>;
   readonly track: <Key extends keyof Events & string>(
     key: Key,
-    payload: EventPayload<Events[Key]>,
-    options?: TrackOptions
+    payload: EffectEventPayload<Events[Key]>,
+    options?: EffectTrackOptions
   ) => void;
   readonly trackNow: <Key extends keyof Events & string>(
     key: Key,
-    payload: EventPayload<Events[Key]>,
-    options?: TrackOptions
+    payload: EffectEventPayload<Events[Key]>,
+    options?: EffectTrackOptions
   ) => Promise<void>;
-  readonly flush: () => Promise<void>;
-  readonly shutdown: () => Promise<void>;
-};
+}
 
-export function createTracker<const Events extends EventsMap>(
+export function createTracker<const Events extends EffectEventsMap>(
   options: TrackerOptions<Events>
 ): Tracker<Events> {
   const flushInterval = options.flushInterval ?? 5000;
@@ -107,13 +105,13 @@ export function createTracker<const Events extends EventsMap>(
 
     timer = setTimeout(() => {
       timer = undefined;
-      void flush().catch(() => undefined);
+      flush().catch(() => undefined);
     }, flushInterval);
   };
 
   return {
     track: (key, payload, trackOptions) => {
-      void Effect.runPromise(tracker.track(key, payload, trackOptions))
+      Effect.runPromise(tracker.track(key, payload, trackOptions))
         .then(scheduleFlush)
         .catch((error) => options.onError?.(error));
     },
@@ -130,15 +128,16 @@ export function createTracker<const Events extends EventsMap>(
   };
 }
 
-export function consoleSink<Events extends EventsMap>(
+export function consoleSink<Events extends EffectEventsMap>(
   log: Pick<Console, "log"> = console
 ): Sink<Events> {
   return (batch) => Effect.runSync(effectConsoleSink<Events>(log)(batch));
 }
 
-export function httpSink<Events extends EventsMap>(
+export function httpSink<Events extends EffectEventsMap>(
   url: string | URL,
-  options: HttpSinkOptions = {}
+  options: EffectHttpSinkOptions = {}
 ): Sink<Events> {
-  return (batch) => Effect.runPromise(effectHttpSink<Events>(url, options)(batch));
+  return (batch) =>
+    Effect.runPromise(effectHttpSink<Events>(url, options)(batch));
 }

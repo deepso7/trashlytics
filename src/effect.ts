@@ -1,6 +1,6 @@
 import { Duration, Effect, Schedule, Schema } from "effect";
 
-type AnySchema = Schema.Decoder<any, never>;
+type AnySchema = Schema.Decoder<unknown, never>;
 type EventFields = Schema.Struct.Fields;
 
 export class UnknownEventError extends Schema.TaggedErrorClass<UnknownEventError>()(
@@ -29,19 +29,15 @@ export class SinkDeliveryError extends Schema.TaggedErrorClass<SinkDeliveryError
   }
 ) {}
 
-export type EventDefinition<Name extends string, Payload> = {
+export interface EventDefinition<Name extends string, Payload> {
   readonly name: Name;
   readonly schema: Schema.Decoder<Payload, never>;
-};
+}
 
-export type EventPayload<Definition> = Definition extends EventDefinition<
-  string,
-  infer Payload
->
-  ? Payload
-  : never;
+export type EventPayload<Definition> =
+  Definition extends EventDefinition<string, infer Payload> ? Payload : never;
 
-export type EventsMap = Record<string, EventDefinition<string, any>>;
+export type EventsMap = Record<string, EventDefinition<string, unknown>>;
 
 export type TrackedEvent<
   Events extends EventsMap,
@@ -58,32 +54,36 @@ export type TrackedEvent<
 
 export type EventMeta = Record<string, unknown>;
 
-export type Sink<Events extends EventsMap, Error = never, Requirements = never> = (
-  batch: ReadonlyArray<TrackedEvent<Events>>
-) => Effect.Effect<void, Error, Requirements>;
-
-export type RetryOptions = {
-  readonly attempts?: number;
-  readonly delay?: number;
-  readonly factor?: number;
-};
-
-export type TrackerOptions<
+export type Sink<
   Events extends EventsMap,
   Error = never,
   Requirements = never,
-> = {
-  readonly events: Events;
-  readonly sink: Sink<Events, Error, Requirements>;
+> = (
+  batch: readonly TrackedEvent<Events>[]
+) => Effect.Effect<void, Error, Requirements>;
+
+export interface RetryOptions {
+  readonly attempts?: number;
+  readonly delay?: number;
+  readonly factor?: number;
+}
+
+export interface TrackerOptions<
+  Events extends EventsMap,
+  Error = never,
+  Requirements = never,
+> {
   readonly batchSize?: number;
   readonly bufferSize?: number;
+  readonly events: Events;
   readonly retries?: number | RetryOptions;
-};
+  readonly sink: Sink<Events, Error, Requirements>;
+}
 
-export type TrackOptions = {
-  readonly timestamp?: number;
+export interface TrackOptions {
   readonly meta?: EventMeta;
-};
+  readonly timestamp?: number;
+}
 
 export type TrackError =
   | Schema.SchemaError
@@ -91,11 +91,13 @@ export type TrackError =
   | TrackerShutdownError
   | BufferFullError;
 
-export type Tracker<
+export interface Tracker<
   Events extends EventsMap,
   Error = never,
   Requirements = never,
-> = {
+> {
+  readonly flush: () => Effect.Effect<void, Error, Requirements>;
+  readonly shutdown: () => Effect.Effect<void, Error, Requirements>;
   readonly track: <Key extends keyof Events & string>(
     key: Key,
     payload: EventPayload<Events[Key]>,
@@ -105,20 +107,25 @@ export type Tracker<
     key: Key,
     payload: EventPayload<Events[Key]>,
     options?: TrackOptions
-  ) => Effect.Effect<void, Schema.SchemaError | UnknownEventError | TrackerShutdownError | Error, Requirements>;
-  readonly flush: () => Effect.Effect<void, Error, Requirements>;
-  readonly shutdown: () => Effect.Effect<void, Error, Requirements>;
-};
+  ) => Effect.Effect<
+    void,
+    Schema.SchemaError | UnknownEventError | TrackerShutdownError | Error,
+    Requirements
+  >;
+}
 
 type InferFields<Fields extends EventFields> = Schema.Schema.Type<
   Schema.Struct<Fields>
 >;
 
-export function event<const Name extends string, const Fields extends EventFields>(
-  name: Name,
-  fields: Fields
-): EventDefinition<Name, InferFields<Fields>>;
-export function event<const Name extends string, const EventSchema extends AnySchema>(
+export function event<
+  const Name extends string,
+  const Fields extends EventFields,
+>(name: Name, fields: Fields): EventDefinition<Name, InferFields<Fields>>;
+export function event<
+  const Name extends string,
+  const EventSchema extends AnySchema,
+>(
   name: Name,
   schema: EventSchema
 ): EventDefinition<Name, Schema.Schema.Type<EventSchema>>;
@@ -135,14 +142,16 @@ export function createTracker<
   const Events extends EventsMap,
   Error = never,
   Requirements = never,
->(options: TrackerOptions<Events, Error, Requirements>): Tracker<Events, Error, Requirements> {
+>(
+  options: TrackerOptions<Events, Error, Requirements>
+): Tracker<Events, Error, Requirements> {
   const batchSize = options.batchSize ?? 20;
   const bufferSize = options.bufferSize ?? 1000;
   const retryOptions = normalizeRetries(options.retries);
-  const queue: Array<TrackedEvent<Events>> = [];
+  const queue: TrackedEvent<Events>[] = [];
   let closed = false;
 
-  const flush = Effect.fn("trashlytics.flush")(function*() {
+  const flush = Effect.fn("trashlytics.flush")(function* () {
     while (queue.length > 0) {
       const batch = queue.splice(0, batchSize);
 
@@ -162,18 +171,23 @@ export function createTracker<
     }
 
     return Schema.decodeUnknownEffect(definition.schema)(payload).pipe(
-      Effect.map((decodedPayload) => ({
-        key,
-        name: definition.name,
-        payload: decodedPayload,
-        timestamp: trackOptions?.timestamp ?? Date.now(),
-        ...(trackOptions?.meta === undefined ? {} : { meta: trackOptions.meta }),
-      }))
+      Effect.map(
+        (decodedPayload): TrackedEvent<Events, Key> => ({
+          key,
+          name: definition.name,
+          payload: decodedPayload as EventPayload<Events[Key]>,
+          timestamp: trackOptions?.timestamp ?? Date.now(),
+          ...(trackOptions?.meta === undefined
+            ? {}
+            : { meta: trackOptions.meta }),
+        })
+      )
     );
   };
 
   return {
-    track: Effect.fn("trashlytics.track")(function*(key, payload, trackOptions) {
+    track: Effect.fn("trashlytics.track")(
+      function* (key, payload, trackOptions) {
         if (closed) {
           return yield* new TrackerShutdownError();
         }
@@ -189,9 +203,11 @@ export function createTracker<
         if (queue.length >= batchSize) {
           yield* flush();
         }
-      }),
+      }
+    ),
 
-    trackNow: Effect.fn("trashlytics.trackNow")(function*(key, payload, trackOptions) {
+    trackNow: Effect.fn("trashlytics.trackNow")(
+      function* (key, payload, trackOptions) {
         if (closed) {
           return yield* new TrackerShutdownError();
         }
@@ -199,14 +215,15 @@ export function createTracker<
         const trackedEvent = yield* makeEvent(key, payload, trackOptions);
 
         yield* sendWithRetries(options.sink, [trackedEvent], retryOptions);
-      }),
+      }
+    ),
 
     flush,
 
-    shutdown: Effect.fn("trashlytics.shutdown")(function*() {
-        closed = true;
-        yield* flush();
-      }),
+    shutdown: Effect.fn("trashlytics.shutdown")(function* () {
+      closed = true;
+      yield* flush();
+    }),
   };
 }
 
@@ -253,7 +270,7 @@ export function httpSink<Events extends EventsMap>(
 
 export function sendWithRetries<Events extends EventsMap, Error, Requirements>(
   sink: Sink<Events, Error, Requirements>,
-  batch: ReadonlyArray<TrackedEvent<Events>>,
+  batch: readonly TrackedEvent<Events>[],
   retries: Required<RetryOptions>
 ) {
   return Effect.retry(sink(batch), {

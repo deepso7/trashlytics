@@ -13,25 +13,13 @@ const events = {
   }),
 };
 
-if (false) {
-  const tracker = createTracker({ events, sink: () => undefined });
-
-  tracker.track("signup", { userId: "u_1", plan: "free" });
-
-  // @ts-expect-error invalid literal payload
-  tracker.track("signup", { userId: "u_1", plan: "enterprise" });
-
-  // @ts-expect-error missing required payload field
-  tracker.track("purchase", { orderId: "o_1" });
-}
-
 describe("tracker", () => {
   it("sends typed batches", async () => {
-    const batches: Array<ReadonlyArray<TrackedEvent<typeof events>>> = [];
+    const batches: (readonly TrackedEvent<typeof events>[])[] = [];
     const tracker = createTracker({
       events,
       flushInterval: 0,
-      sink: async (batch) => {
+      sink: (batch) => {
         for (const item of batch) {
           if (item.key === "signup") {
             const plan: "free" | "pro" = item.payload.plan;
@@ -69,13 +57,13 @@ describe("tracker", () => {
   });
 
   it("does not queue invalid payloads", async () => {
-    const errors: Array<unknown> = [];
-    const batches: Array<ReadonlyArray<TrackedEvent<typeof events>>> = [];
+    const errors: unknown[] = [];
+    const batches: (readonly TrackedEvent<typeof events>[])[] = [];
     const tracker = createTracker({
       events,
       flushInterval: 0,
       onError: (error) => errors.push(error),
-      sink: async (batch) => {
+      sink: (batch) => {
         batches.push(batch);
       },
     });
@@ -95,11 +83,11 @@ describe("tracker", () => {
         Schema.Struct({ userId: Schema.String })
       ),
     };
-    const batches: Array<ReadonlyArray<TrackedEvent<typeof schemaEvents>>> = [];
+    const batches: (readonly TrackedEvent<typeof schemaEvents>[])[] = [];
     const tracker = createTracker({
       events: schemaEvents,
       flushInterval: 0,
-      sink: async (batch) => {
+      sink: (batch) => {
         batches.push(batch);
       },
     });
@@ -118,12 +106,12 @@ describe("tracker", () => {
   });
 
   it("splits flushes by batch size", async () => {
-    const batches: Array<ReadonlyArray<TrackedEvent<typeof events>>> = [];
+    const batches: (readonly TrackedEvent<typeof events>[])[] = [];
     const tracker = createTracker({
       events,
       batchSize: 2,
       flushInterval: 0,
-      sink: async (batch) => {
+      sink: (batch) => {
         batches.push([...batch]);
       },
     });
@@ -143,7 +131,7 @@ describe("tracker", () => {
       events,
       flushInterval: 0,
       retries: { attempts: 2, delay: 1, factor: 1 },
-      sink: async () => {
+      sink: () => {
         attempts += 1;
 
         if (attempts < 3) {
@@ -158,11 +146,11 @@ describe("tracker", () => {
   });
 
   it("flushes remaining events on shutdown", async () => {
-    const batches: Array<ReadonlyArray<TrackedEvent<typeof events>>> = [];
+    const batches: (readonly TrackedEvent<typeof events>[])[] = [];
     const tracker = createTracker({
       events,
       flushInterval: 10_000,
-      sink: async (batch) => {
+      sink: (batch) => {
         batches.push(batch);
       },
     });

@@ -1,10 +1,6 @@
 import { Effect, Schema } from "effect";
 import { describe, expect, it } from "vitest";
-import {
-  createTracker,
-  event,
-  type TrackedEvent,
-} from "../src/effect";
+import { createTracker, event, type TrackedEvent } from "../src/effect";
 
 const events = {
   signup: event("user.signup", {
@@ -15,7 +11,7 @@ const events = {
 
 describe("effect tracker", () => {
   it("exposes Effect-native tracker operations", async () => {
-    const batches: Array<ReadonlyArray<TrackedEvent<typeof events>>> = [];
+    const batches: (readonly TrackedEvent<typeof events>[])[] = [];
     const tracker = createTracker({
       events,
       sink: (batch) =>
@@ -25,7 +21,7 @@ describe("effect tracker", () => {
     });
 
     await Effect.runPromise(
-      Effect.gen(function*() {
+      Effect.gen(function* () {
         yield* tracker.track("signup", { userId: "u_1", plan: "free" });
         yield* tracker.flush();
       })
