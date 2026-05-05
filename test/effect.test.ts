@@ -1,0 +1,67 @@
+import { Effect, Schema } from "effect";
+import { describe, expect, it } from "vitest";
+import {
+  createTracker,
+  event,
+  type TrackedEvent,
+} from "../src/effect";
+
+const events = {
+  signup: event("user.signup", {
+    userId: Schema.String,
+    plan: Schema.Literals(["free", "pro"]),
+  }),
+};
+
+describe("effect tracker", () => {
+  it("exposes Effect-native tracker operations", async () => {
+    const batches: Array<ReadonlyArray<TrackedEvent<typeof events>>> = [];
+    const tracker = createTracker({
+      events,
+      sink: (batch) =>
+        Effect.sync(() => {
+          batches.push(batch);
+        }),
+    });
+
+    await Effect.runPromise(
+      Effect.gen(function*() {
+        yield* tracker.track("signup", { userId: "u_1", plan: "free" });
+        yield* tracker.flush();
+      })
+    );
+
+    expect(batches).toHaveLength(1);
+    expect(batches[0]).toMatchObject([
+      {
+        key: "signup",
+        name: "user.signup",
+        payload: { userId: "u_1", plan: "free" },
+      },
+    ]);
+  });
+
+  it("retries Effect sink failures", async () => {
+    let attempts = 0;
+    const tracker = createTracker({
+      events,
+      retries: { attempts: 2, delay: 1, factor: 1 },
+      sink: () =>
+        Effect.sync(() => {
+          attempts += 1;
+        }).pipe(
+          Effect.andThen(() =>
+            attempts < 3
+              ? Effect.fail(new Error("not yet"))
+              : Effect.succeed(undefined)
+          )
+        ),
+    });
+
+    await Effect.runPromise(
+      tracker.trackNow("signup", { userId: "u_1", plan: "free" })
+    );
+
+    expect(attempts).toBe(3);
+  });
+});

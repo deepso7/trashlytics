@@ -3,7 +3,7 @@ import { defineConfig } from "rolldown";
 export default defineConfig([
   // ESM build
   {
-    input: "src/index.ts",
+    input: ["src/index.ts", "src/effect.ts"],
     output: {
       dir: "dist",
       format: "esm",
@@ -19,7 +19,7 @@ export default defineConfig([
   },
   // CJS build
   {
-    input: "src/index.ts",
+    input: ["src/index.ts", "src/effect.ts"],
     output: {
       dir: "dist",
       format: "cjs",

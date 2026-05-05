@@ -16,6 +16,16 @@
         "types": "./dist/index.d.cts",
         "default": "./dist/index.cjs"
       }
+    },
+    "./effect": {
+      "import": {
+        "types": "./dist/effect.d.ts",
+        "default": "./dist/effect.js"
+      },
+      "require": {
+        "types": "./dist/effect.d.cts",
+        "default": "./dist/effect.cjs"
+      }
     }
   },
   "files": [
@@ -23,7 +33,7 @@
   ],
   "sideEffects": false,
   "scripts": {
-    "build": "rolldown -c && tsc -p tsconfig.build.json && cp dist/index.d.ts dist/index.d.cts",
+    "build": "rolldown -c && tsc -p tsconfig.build.json && cp dist/index.d.ts dist/index.d.cts && cp dist/effect.d.ts dist/effect.d.cts",
     "test": "vitest",
     "check": "ultracite check",
     "fix": "ultracite fix",

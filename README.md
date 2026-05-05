@@ -4,6 +4,8 @@ A lightweight, generic event tracking library with type-safe events, runtime val
 
 Effect powers validation and delivery internally. App code uses a plain TypeScript API.
 
+Use `trashlytics/effect` when your app is already Effect-based and you want tracker operations as `Effect` values.
+
 ## Usage
 
 ```ts
@@ -90,6 +92,37 @@ await tracker.trackNow("purchase", {
   total: 49
 })
 ```
+
+## Effect-Native API
+
+```ts
+import { Effect, Schema } from "effect"
+import { createTracker, event, httpSink } from "trashlytics/effect"
+
+const events = {
+  signup: event("user.signup", {
+    userId: Schema.String,
+    plan: Schema.Literals(["free", "pro"])
+  })
+}
+
+const tracker = createTracker({
+  events,
+  sink: httpSink("/api/events"),
+  retries: { attempts: 3, delay: 250, factor: 2 }
+})
+
+const program = Effect.gen(function*() {
+  yield* tracker.track("signup", {
+    userId: "u_123",
+    plan: "free"
+  })
+
+  yield* tracker.flush()
+})
+```
+
+The root `trashlytics` entry point wraps this API with `Promise`/`void` methods. The `trashlytics/effect` entry point does not hide the Effect boundary.
 
 ## Custom Sinks
 
