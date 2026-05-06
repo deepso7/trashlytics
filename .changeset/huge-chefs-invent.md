@@ -1,0 +1,5 @@
+---
+"trashlytics": minor
+---
+
+add jsdocs
