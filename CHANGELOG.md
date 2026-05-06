@@ -1,5 +1,11 @@
 # trashlytics
 
+## 0.3.0
+
+### Minor Changes
+
+- a569da2: add jsdocs
+
 ## 0.2.1
 
 ### Patch Changes
