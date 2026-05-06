@@ -12,6 +12,9 @@ import {
 type AnySchema = Schema.Decoder<unknown, never>;
 type EventFields = Schema.Struct.Fields;
 
+/**
+ * Error returned when an event key is not present in a tracker's event registry.
+ */
 export class UnknownEventError extends Schema.TaggedErrorClass<UnknownEventError>()(
   "UnknownEventError",
   {
@@ -19,11 +22,17 @@ export class UnknownEventError extends Schema.TaggedErrorClass<UnknownEventError
   }
 ) {}
 
+/**
+ * Error returned when a tracker operation is attempted after shutdown.
+ */
 export class TrackerShutdownError extends Schema.TaggedErrorClass<TrackerShutdownError>()(
   "TrackerShutdownError",
   {}
 ) {}
 
+/**
+ * Error returned when a queued event cannot be accepted because the buffer is full.
+ */
 export class BufferFullError extends Schema.TaggedErrorClass<BufferFullError>()(
   "BufferFullError",
   {
@@ -31,6 +40,9 @@ export class BufferFullError extends Schema.TaggedErrorClass<BufferFullError>()(
   }
 ) {}
 
+/**
+ * Wraps failures raised while delivering a batch to a sink.
+ */
 export class SinkDeliveryError extends Schema.TaggedErrorClass<SinkDeliveryError>()(
   "SinkDeliveryError",
   {
@@ -38,16 +50,28 @@ export class SinkDeliveryError extends Schema.TaggedErrorClass<SinkDeliveryError
   }
 ) {}
 
+/**
+ * Defines a trackable event name and the schema used to validate its payload.
+ */
 export interface EventDefinition<Name extends string, Payload> {
   readonly name: Name;
   readonly schema: Schema.Decoder<Payload, never>;
 }
 
+/**
+ * Extracts the payload type from an {@link EventDefinition}.
+ */
 export type EventPayload<Definition> =
   Definition extends EventDefinition<string, infer Payload> ? Payload : never;
 
+/**
+ * Registry of event keys accepted by a tracker.
+ */
 export type EventsMap = Record<string, EventDefinition<string, unknown>>;
 
+/**
+ * Event object delivered to sinks after validation and timestamping.
+ */
 export type TrackedEvent<
   Events extends EventsMap,
   Key extends keyof Events & string = keyof Events & string,
@@ -61,8 +85,14 @@ export type TrackedEvent<
   };
 }[Key];
 
+/**
+ * Optional metadata attached to an individual tracked event.
+ */
 export type EventMeta = Record<string, unknown>;
 
+/**
+ * Effect-native sink that receives validated events in batches.
+ */
 export type Sink<
   Events extends EventsMap,
   Error = never,
@@ -71,49 +101,89 @@ export type Sink<
   batch: readonly TrackedEvent<Events>[]
 ) => Effect.Effect<void, Error, Requirements>;
 
+/**
+ * Retry configuration for failed sink deliveries.
+ */
 export interface RetryOptions {
+  /** Number of retry attempts after the initial delivery attempt. */
   readonly attempts?: number;
+  /** Initial retry delay in milliseconds. */
   readonly delay?: number;
+  /** Exponential backoff multiplier. */
   readonly factor?: number;
 }
 
+/**
+ * Configuration used to create an Effect-native tracker.
+ */
 export interface TrackerOptions<
   Events extends EventsMap,
   Error = never,
   Requirements = never,
 > {
+  /** Maximum number of events delivered in one sink call. Defaults to 20. */
   readonly batchSize?: number;
+  /**
+   * Maximum number of queued events before new events are dropped. Defaults to
+   * 1000.
+   */
   readonly bufferSize?: number;
+  /** Event definitions accepted by this tracker. */
   readonly events: Events;
+  /**
+   * Automatic flush interval in milliseconds. Set to 0 to disable. Defaults to
+   * 5000.
+   */
   readonly flushInterval?: number;
+  /** Called when background delivery fails. */
   readonly onError?: (error: unknown) => void;
+  /** Retry policy for failed sink deliveries. */
   readonly retries?: number | RetryOptions;
+  /** Destination for validated event batches. */
   readonly sink: Sink<Events, Error, Requirements>;
 }
 
+/**
+ * Per-event options accepted by {@link Tracker.track} and {@link Tracker.trackNow}.
+ */
 export interface TrackOptions {
+  /** Metadata copied onto the tracked event. */
   readonly meta?: EventMeta;
+  /**
+   * Event timestamp in milliseconds since the Unix epoch. Defaults to
+   * `Date.now()`.
+   */
   readonly timestamp?: number;
 }
 
+/**
+ * Errors that can be raised while accepting an event for tracking.
+ */
 export type TrackError =
   | Schema.SchemaError
   | UnknownEventError
   | TrackerShutdownError
   | BufferFullError;
 
+/**
+ * Effect-native tracker for validating, queueing, and delivering typed events.
+ */
 export interface Tracker<
   Events extends EventsMap,
   Error = never,
   Requirements = never,
 > {
+  /** Delivers all currently queued events. */
   readonly flush: () => Effect.Effect<void, Error, Requirements>;
+  /** Stops background flushing and delivers remaining queued events. */
   readonly shutdown: () => Effect.Effect<void, Error, Requirements>;
+  /** Validates and queues an event for batched delivery. */
   readonly track: <Key extends keyof Events & string>(
     key: Key,
     payload: EventPayload<Events[Key]>,
     options?: TrackOptions
   ) => Effect.Effect<void, TrackError | Error, Requirements>;
+  /** Validates an event and delivers it immediately without queueing. */
   readonly trackNow: <Key extends keyof Events & string>(
     key: Key,
     payload: EventPayload<Events[Key]>,
@@ -129,10 +199,24 @@ type InferFields<Fields extends EventFields> = Schema.Schema.Type<
   Schema.Struct<Fields>
 >;
 
+/**
+ * Creates a typed event definition from a public event name and struct fields.
+ *
+ * @param name - Public event name delivered to sinks.
+ * @param fields - Struct fields used to validate and type the event payload.
+ * @returns A typed event definition for use in a tracker event registry.
+ */
 export function event<
   const Name extends string,
   const Fields extends EventFields,
 >(name: Name, fields: Fields): EventDefinition<Name, InferFields<Fields>>;
+/**
+ * Creates a typed event definition from a public event name and a schema.
+ *
+ * @param name - Public event name delivered to sinks.
+ * @param schema - Schema used to validate and type the event payload.
+ * @returns A typed event definition for use in a tracker event registry.
+ */
 export function event<
   const Name extends string,
   const EventSchema extends AnySchema,
@@ -140,6 +224,15 @@ export function event<
   name: Name,
   schema: EventSchema
 ): EventDefinition<Name, Schema.Schema.Type<EventSchema>>;
+/**
+ * Creates a typed event definition from a public event name and an Effect schema.
+ *
+ * The second argument may be either a full schema or `Schema.Struct` fields.
+ *
+ * @param name - Public event name delivered to sinks.
+ * @param schemaOrFields - Full schema or struct fields used for payload validation.
+ * @returns A typed event definition for use in a tracker event registry.
+ */
 export function event(name: string, schemaOrFields: AnySchema | EventFields) {
   return {
     name,
@@ -149,6 +242,13 @@ export function event(name: string, schemaOrFields: AnySchema | EventFields) {
   };
 }
 
+/**
+ * Creates an Effect-native tracker that validates event payloads before delivering
+ * them to the configured sink.
+ *
+ * @param options - Tracker configuration, including event definitions and sink.
+ * @returns A tracker whose operations return Effect values.
+ */
 export function createTracker<
   const Events extends EventsMap,
   Error = never,
@@ -328,6 +428,12 @@ export function createTracker<
   };
 }
 
+/**
+ * Creates a sink that logs each delivered batch with `console.log`.
+ *
+ * @param log - Logger implementation to receive delivered batches.
+ * @returns An Effect-native sink for tracker configuration.
+ */
 export function consoleSink<Events extends EventsMap>(
   log: Pick<Console, "log"> = console
 ): Sink<Events> {
@@ -337,10 +443,21 @@ export function consoleSink<Events extends EventsMap>(
     });
 }
 
+/**
+ * Fetch options accepted by {@link httpSink}.
+ */
 export type HttpSinkOptions = Omit<RequestInit, "body" | "method"> & {
+  /** HTTP method used to deliver batches. Defaults to `POST`. */
   readonly method?: "POST" | "PUT" | "PATCH";
 };
 
+/**
+ * Creates a sink that posts JSON-encoded batches to an HTTP endpoint.
+ *
+ * @param url - HTTP endpoint that receives event batches.
+ * @param options - Fetch options and optional delivery method.
+ * @returns An Effect-native sink that fails with `SinkDeliveryError`.
+ */
 export function httpSink<Events extends EventsMap>(
   url: string | URL,
   options: HttpSinkOptions = {}
@@ -369,6 +486,14 @@ export function httpSink<Events extends EventsMap>(
     });
 }
 
+/**
+ * Delivers a batch through a sink using the provided retry policy.
+ *
+ * @param sink - Sink used to deliver the batch.
+ * @param batch - Validated events to deliver.
+ * @param retries - Expanded retry policy.
+ * @returns An Effect that completes when delivery succeeds or retries are exhausted.
+ */
 export function sendWithRetries<Events extends EventsMap, Error, Requirements>(
   sink: Sink<Events, Error, Requirements>,
   batch: readonly TrackedEvent<Events>[],
@@ -383,6 +508,12 @@ export function sendWithRetries<Events extends EventsMap, Error, Requirements>(
   });
 }
 
+/**
+ * Expands shorthand retry configuration into explicit retry defaults.
+ *
+ * @param retries - Retry count, partial retry options, or undefined.
+ * @returns Retry options with attempts, delay, and factor populated.
+ */
 export function normalizeRetries(retries: number | RetryOptions | undefined) {
   if (typeof retries === "number") {
     return { attempts: retries, delay: 250, factor: 2 };
