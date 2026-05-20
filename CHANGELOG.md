@@ -1,5 +1,11 @@
 # trashlytics
 
+## 0.3.1
+
+### Patch Changes
+
+- 7dc50f2: Switch the package build from Rolldown to tsdown.
+
 ## 0.3.0
 
 ### Minor Changes
