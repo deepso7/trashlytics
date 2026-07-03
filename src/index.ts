@@ -1,19 +1,18 @@
-import { Effect } from "effect";
+import { Effect, Exit, Scope } from "effect";
 import type {
-  EventPayload as EffectEventPayload,
-  EventsMap as EffectEventsMap,
-  HttpSinkOptions as EffectHttpSinkOptions,
-  TrackedEvent as EffectTrackedEvent,
+  Sink as EffectSink,
   TrackerOptions as EffectTrackerOptions,
-  TrackOptions as EffectTrackOptions,
+  EventsMap,
+  TrackArgs,
+  TrackedEvent,
 } from "./effect";
-import {
-  createTracker as createEffectTracker,
-  consoleSink as effectConsoleSink,
-  event as effectEvent,
-  httpSink as effectHttpSink,
-  SinkDeliveryError,
-} from "./effect";
+import { make, SinkError } from "./effect";
+
+// Runtime support for `await using` on platforms that predate the explicit
+// resource management proposal.
+(Symbol as { asyncDispose?: symbol }).asyncDispose ??= Symbol.for(
+  "Symbol.asyncDispose"
+);
 
 export type {
   EventDefinition,
@@ -21,144 +20,185 @@ export type {
   EventPayload,
   EventsMap,
   HttpSinkOptions,
-  RetryOptions,
+  RetryPolicy,
+  StandardIssue,
+  StandardResult,
+  StandardSchemaV1,
+  TrackError,
   TrackedEvent,
   TrackOptions,
+  ValidationIssue,
+} from "./effect";
+// biome-ignore lint/performance/noBarrelFile: the root entry intentionally shares the event/sink/error API with the Effect entry.
+export {
+  beaconSink,
+  consoleSink,
+  EventValidationError,
+  event,
+  httpSink,
+  QueueFullError,
+  SinkError,
+  TrackerClosedError,
+  UnknownEventError,
 } from "./effect";
 
 /**
- * Creates a typed event definition from a public event name and an Effect schema
- * or `Schema.Struct` fields.
+ * Sink that receives validated events in batches.
  *
- * @param name - Public event name delivered to sinks.
- * @param schemaOrFields - Full schema or struct fields used for payload validation.
- * @returns A typed event definition for use in a tracker event registry.
+ * May return `void`, a `Promise`, or an Effect — so the sinks exported from
+ * this module ({@link httpSink}, {@link beaconSink}, {@link consoleSink}) and
+ * plain async functions both work.
  */
-export const event = effectEvent;
-
-/**
- * Promise-style sink that receives validated events in batches.
- */
-export type Sink<Events extends EffectEventsMap> = (
-  batch: readonly EffectTrackedEvent<Events>[]
-) => void | Promise<void>;
+export type Sink<Events extends EventsMap> = (
+  batch: readonly TrackedEvent<Events>[]
+) => void | Promise<void> | Effect.Effect<void, unknown>;
 
 /**
  * Configuration used to create a Promise-style tracker.
  */
-export type TrackerOptions<Events extends EffectEventsMap> = Omit<
-  EffectTrackerOptions<Events, SinkDeliveryError, never>,
-  "onError" | "sink"
+export type TrackerOptions<Events extends EventsMap> = Omit<
+  EffectTrackerOptions<Events, unknown, never>,
+  "sink"
 > & {
   /** Destination for validated event batches. */
   readonly sink: Sink<Events>;
-  /** Automatic flush interval in milliseconds. Set to 0 to disable. */
-  readonly flushInterval?: number;
-  /** Called when asynchronous tracking or background delivery fails. */
-  readonly onError?: (
-    error: unknown,
-    batch?: readonly EffectTrackedEvent<Events>[]
-  ) => void;
+  /**
+   * Flushes pending events when the page is hidden or unloading (browsers
+   * only; ignored elsewhere). Defaults to true.
+   */
+  readonly flushOnHide?: boolean;
 };
 
 /**
  * Promise-style tracker for validating, queueing, and delivering typed events.
+ *
+ * Supports `await using tracker = createTracker(...)` for automatic cleanup.
  */
-export interface Tracker<Events extends EffectEventsMap> {
-  /** Delivers all currently queued events. */
+export interface Tracker<Events extends EventsMap> extends AsyncDisposable {
+  /**
+   * Stops background delivery, flushes all remaining events, and releases
+   * resources. Idempotent. Tracking after `close` reports
+   * `TrackerClosedError` through `onError`.
+   */
+  readonly close: () => Promise<void>;
+  /** Delivers all currently queued events and waits for completion. */
   readonly flush: () => Promise<void>;
-  /** Stops background flushing and delivers remaining queued events. */
-  readonly shutdown: () => Promise<void>;
-  /** Validates and queues an event for batched delivery. */
+  /**
+   * Validates and queues an event for batched background delivery. Fire and
+   * forget: it never throws and never waits on the sink. Validation and
+   * delivery failures are reported through `onError`.
+   */
   readonly track: <Key extends keyof Events & string>(
     key: Key,
-    payload: EffectEventPayload<Events[Key]>,
-    options?: EffectTrackOptions
+    ...args: TrackArgs<Events[Key]>
   ) => void;
-  /** Validates an event and delivers it immediately without queueing. */
+  /** Validates an event and delivers it immediately, bypassing the queue. */
   readonly trackNow: <Key extends keyof Events & string>(
     key: Key,
-    payload: EffectEventPayload<Events[Key]>,
-    options?: EffectTrackOptions
+    ...args: TrackArgs<Events[Key]>
   ) => Promise<void>;
 }
 
 /**
  * Creates a Promise-style tracker that validates event payloads before
- * delivering them to the configured sink.
+ * delivering them to the configured sink in batches on a background fiber.
  *
  * @param options - Tracker configuration, including event definitions and sink.
  * @returns A tracker whose operations use Promise-style APIs.
  */
-export function createTracker<const Events extends EffectEventsMap>(
+export function createTracker<const Events extends EventsMap>(
   options: TrackerOptions<Events>
 ): Tracker<Events> {
-  const tracker = createEffectTracker({
-    events: options.events,
-    sink: (batch) =>
-      Effect.tryPromise({
-        try: async () => {
-          await options.sink(batch);
-        },
-        catch: (cause) => new SinkDeliveryError({ cause }),
-      }),
-    batchSize: options.batchSize,
-    bufferSize: options.bufferSize,
-    flushInterval: options.flushInterval,
-    onError: options.onError,
-    retries: options.retries,
-  });
+  const scope = Scope.makeUnsafe();
+  const tracker = Effect.runSync(
+    Scope.provide(make({ ...options, sink: adaptSink(options.sink) }), scope)
+  );
 
-  const flush = async () => {
-    try {
-      await Effect.runPromise(tracker.flush());
-    } catch (error) {
-      options.onError?.(error);
-      throw error;
+  const flush = () => Effect.runPromise(tracker.flush);
+
+  const detachLifecycle = attachLifecycleFlush(
+    options.flushOnHide ?? true,
+    () => {
+      flush().catch(() => {
+        // Delivery failures are already reported through onError.
+      });
     }
+  );
+
+  let closing: Promise<void> | undefined;
+  const close = () => {
+    closing ??= (() => {
+      detachLifecycle();
+      return Effect.runPromise(Scope.close(scope, Exit.void));
+    })();
+
+    return closing;
   };
 
   return {
-    track: (key, payload, trackOptions) => {
-      Effect.runPromise(tracker.track(key, payload, trackOptions)).catch(
-        (error) => options.onError?.(error)
-      );
+    track: (key, ...args) => {
+      Effect.runPromise(tracker.track(key, ...args)).catch((error) => {
+        options.onError?.(error);
+      });
     },
 
-    trackNow: (key, payload, trackOptions) =>
-      Effect.runPromise(tracker.trackNow(key, payload, trackOptions)),
+    trackNow: (key, ...args) =>
+      Effect.runPromise(tracker.trackNow(key, ...args)),
 
     flush,
 
-    shutdown: async () => {
-      await Effect.runPromise(tracker.shutdown());
-    },
+    close,
+
+    [Symbol.asyncDispose]: close,
   };
 }
 
-/**
- * Creates a sink that logs each delivered batch with `console.log`.
- *
- * @param log - Logger implementation to receive delivered batches.
- * @returns A Promise-style sink for tracker configuration.
- */
-export function consoleSink<Events extends EffectEventsMap>(
-  log: Pick<Console, "log"> = console
-): Sink<Events> {
-  return (batch) => Effect.runSync(effectConsoleSink<Events>(log)(batch));
+function adaptSink<Events extends EventsMap>(
+  sink: Sink<Events>
+): EffectSink<Events, unknown> {
+  return (batch) =>
+    Effect.suspend(() => {
+      let result: ReturnType<Sink<Events>>;
+
+      try {
+        result = sink(batch);
+      } catch (cause) {
+        return Effect.fail(new SinkError({ cause }));
+      }
+
+      if (Effect.isEffect(result)) {
+        return result;
+      }
+
+      if (result instanceof Promise) {
+        return Effect.tryPromise({
+          try: () => result as Promise<void>,
+          catch: (cause) => new SinkError({ cause }),
+        });
+      }
+
+      return Effect.void;
+    });
 }
 
-/**
- * Creates a sink that posts JSON-encoded batches to an HTTP endpoint.
- *
- * @param url - HTTP endpoint that receives event batches.
- * @param options - Fetch options and optional delivery method.
- * @returns A Promise-style sink for tracker configuration.
- */
-export function httpSink<Events extends EffectEventsMap>(
-  url: string | URL,
-  options: EffectHttpSinkOptions = {}
-): Sink<Events> {
-  return (batch) =>
-    Effect.runPromise(effectHttpSink<Events>(url, options)(batch));
+function attachLifecycleFlush(enabled: boolean, flush: () => void): () => void {
+  if (!enabled || typeof document === "undefined") {
+    return () => {
+      // Nothing to detach outside browsers.
+    };
+  }
+
+  const onVisibilityChange = () => {
+    if (document.visibilityState === "hidden") {
+      flush();
+    }
+  };
+
+  document.addEventListener("visibilitychange", onVisibilityChange);
+  addEventListener("pagehide", flush);
+
+  return () => {
+    document.removeEventListener("visibilitychange", onVisibilityChange);
+    removeEventListener("pagehide", flush);
+  };
 }

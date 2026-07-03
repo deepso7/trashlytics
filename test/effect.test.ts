@@ -1,9 +1,11 @@
 import { Effect, Schema } from "effect";
 import { describe, expect, it } from "vitest";
 import {
-  createTracker,
+  EventValidationError,
   event,
-  SinkDeliveryError,
+  make,
+  type Sink,
+  SinkError,
   type TrackedEvent,
 } from "../src/effect";
 
@@ -14,22 +16,29 @@ const events = {
   }),
 };
 
-describe("effect tracker", () => {
-  it("exposes Effect-native tracker operations", async () => {
-    const batches: (readonly TrackedEvent<typeof events>[])[] = [];
-    const tracker = createTracker({
-      events,
-      sink: (batch) =>
-        Effect.sync(() => {
-          batches.push(batch);
-        }),
+const collectingSink = () => {
+  const batches: (readonly TrackedEvent<typeof events>[])[] = [];
+  const sink: Sink<typeof events> = (batch) =>
+    Effect.sync(() => {
+      batches.push(batch);
     });
 
+  return { batches, sink };
+};
+
+describe("effect tracker", () => {
+  it("exposes Effect-native tracker operations", async () => {
+    const { batches, sink } = collectingSink();
+
     await Effect.runPromise(
-      Effect.gen(function* () {
-        yield* tracker.track("signup", { userId: "u_1", plan: "free" });
-        yield* tracker.flush();
-      })
+      Effect.scoped(
+        Effect.gen(function* () {
+          const tracker = yield* make({ events, sink, flushInterval: 0 });
+
+          yield* tracker.track("signup", { userId: "u_1", plan: "free" });
+          yield* tracker.flush;
+        })
+      )
     );
 
     expect(batches).toHaveLength(1);
@@ -42,98 +51,111 @@ describe("effect tracker", () => {
     ]);
   });
 
-  it("retries Effect sink failures", async () => {
+  it("fails track with EventValidationError on invalid payloads", async () => {
+    const { sink } = collectingSink();
+
+    const error = await Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const tracker = yield* make({ events, sink, flushInterval: 0 });
+
+          return yield* tracker
+            .track("signup", { userId: "u_1", plan: "enterprise" } as never)
+            .pipe(Effect.flip);
+        })
+      )
+    );
+
+    expect(error).toBeInstanceOf(EventValidationError);
+    expect(error._tag).toBe("EventValidationError");
+    expect(error._tag === "EventValidationError" && error.key).toBe("signup");
+  });
+
+  it("retries sink failures", async () => {
     let attempts = 0;
-    const tracker = createTracker({
-      events,
-      retries: { attempts: 2, delay: 1, factor: 1 },
-      sink: () =>
-        Effect.sync(() => {
-          attempts += 1;
-        }).pipe(
-          Effect.andThen(() =>
-            attempts < 3
-              ? Effect.fail(new SinkDeliveryError({ cause: "not yet" }))
-              : Effect.void
-          )
-        ),
-    });
+    const sink: Sink<typeof events, SinkError> = () =>
+      Effect.suspend(() => {
+        attempts += 1;
+
+        return attempts < 3
+          ? Effect.fail(new SinkError({ cause: "not yet" }))
+          : Effect.void;
+      });
 
     await Effect.runPromise(
-      tracker.trackNow("signup", { userId: "u_1", plan: "free" })
+      Effect.scoped(
+        Effect.gen(function* () {
+          const tracker = yield* make({
+            events,
+            sink,
+            flushInterval: 0,
+            retry: { attempts: 2, delay: 1, factor: 1 },
+          });
+
+          yield* tracker.trackNow("signup", { userId: "u_1", plan: "free" });
+        })
+      )
     );
 
     expect(attempts).toBe(3);
   });
 
-  it("flushes queued events after the flush interval", async () => {
-    const batches: (readonly TrackedEvent<typeof events>[])[] = [];
-    const tracker = createTracker({
-      events,
-      flushInterval: 1,
-      sink: (batch) =>
-        Effect.sync(() => {
-          batches.push([...batch]);
-        }),
-    });
+  it("flushes remaining events when the scope closes", async () => {
+    const { batches, sink } = collectingSink();
 
     await Effect.runPromise(
-      tracker.track("signup", { userId: "u_1", plan: "free" })
+      Effect.scoped(
+        Effect.gen(function* () {
+          const tracker = yield* make({
+            events,
+            sink,
+            flushInterval: 10_000,
+          });
+
+          yield* tracker.track("signup", { userId: "u_1", plan: "free" });
+
+          expect(batches).toHaveLength(0);
+        })
+      )
     );
-    await new Promise((resolve) => setTimeout(resolve, 10));
-    await Effect.runPromise(tracker.shutdown());
 
     expect(batches).toHaveLength(1);
-    expect(batches[0]).toMatchObject([
-      {
-        key: "signup",
-        name: "user.signup",
-        payload: { userId: "u_1", plan: "free" },
-      },
-    ]);
   });
 
-  it("does not interrupt an in-flight interval delivery on shutdown", async () => {
-    const batches: (readonly TrackedEvent<typeof events>[])[] = [];
-    let deliveryStarted!: () => void;
-    let resumeDelivery!: (effect: Effect.Effect<void>) => void;
-    let shutdownCompleted = false;
-    let deliveryInterrupted = false;
-    const deliveryStartedPromise = new Promise<void>((resolve) => {
-      deliveryStarted = resolve;
-    });
-    const tracker = createTracker({
-      events,
-      flushInterval: 1,
-      sink: (batch) =>
-        Effect.callback<void>((resume) => {
-          batches.push([...batch]);
-          resumeDelivery = resume;
-          deliveryStarted();
+  it("reports queue size", async () => {
+    const { sink } = collectingSink();
 
-          return Effect.sync(() => {
-            deliveryInterrupted = true;
-          });
-        }),
-    });
+    const size = await Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const tracker = yield* make({ events, sink, flushInterval: 0 });
+
+          yield* tracker.track("signup", { userId: "u_1", plan: "free" });
+          yield* tracker.track("signup", { userId: "u_2", plan: "pro" });
+
+          return yield* tracker.size;
+        })
+      )
+    );
+
+    expect(size).toBe(2);
+  });
+
+  it("delivers on the flush interval without an explicit flush", async () => {
+    const { batches, sink } = collectingSink();
 
     await Effect.runPromise(
-      tracker.track("signup", { userId: "u_1", plan: "free" })
+      Effect.scoped(
+        Effect.gen(function* () {
+          const tracker = yield* make({ events, sink, flushInterval: 5 });
+
+          yield* tracker.track("signup", { userId: "u_1", plan: "free" });
+
+          yield* Effect.sleep(50);
+        })
+      )
     );
-    await deliveryStartedPromise;
 
-    const shutdownPromise = Effect.runPromise(tracker.shutdown()).then(() => {
-      shutdownCompleted = true;
-    });
-    await new Promise((resolve) => setTimeout(resolve, 0));
-
-    expect(shutdownCompleted).toBe(false);
-    expect(deliveryInterrupted).toBe(false);
-
-    resumeDelivery(Effect.void);
-    await shutdownPromise;
-
-    expect(deliveryInterrupted).toBe(false);
     expect(batches).toHaveLength(1);
   });
 });
