@@ -62,7 +62,7 @@
     "@effect/language-service": "0.86.2",
     "@total-typescript/ts-reset": "0.6.1",
     "@types/node": "26.1.0",
-    "effect": "4.0.0-beta.60",
+    "effect": "4.0.0-beta.93",
     "tsdown": "0.22.3",
     "tsx": "4.22.4",
     "typescript": "6.0.3",
@@ -70,6 +70,6 @@
     "vitest": "4.1.9"
   },
   "peerDependencies": {
-    "effect": "4.0.0-beta.60"
+    "effect": "4.0.0-beta.93"
   }
 }
