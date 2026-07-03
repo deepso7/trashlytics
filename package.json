@@ -55,7 +55,7 @@
     "type": "git",
     "url": "https://github.com/deepso7/trashlytics"
   },
-  "packageManager": "pnpm@10.26.2",
+  "packageManager": "pnpm@11.9.0",
   "devDependencies": {
     "@biomejs/biome": "2.4.15",
     "@changesets/cli": "2.31.0",
