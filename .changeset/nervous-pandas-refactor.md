@@ -9,5 +9,5 @@ Redesign the SDK: scoped Effect core, non-blocking track, Standard Schema suppor
 - Root entry: `close()` replaces `shutdown()`, trackers support `await using` (`Symbol.asyncDispose`), and pending events auto-flush on page hide/unload in browsers (`flushOnHide`)
 - `event()` accepts Effect schemas, `Schema.Struct` fields, any Standard Schema v1 validator (zod/valibot/arktype), or no schema for payload-less events
 - Unified tagged errors: `EventValidationError`, `UnknownEventError`, `TrackerClosedError`, `QueueFullError`, `SinkError` (replaces `SinkDeliveryError`)
-- New options: `context` (meta enrichment), `retry.jitter`, `maxQueueSize` (renamed from `bufferSize`); `retries` renamed to `retry`
+- New options: `context` (meta enrichment), `retry.jitter`, `deliveryTimeout` (bounds each sink call, default 30s), `maxQueueSize` (renamed from `bufferSize`); `retries` renamed to `retry`
 - `httpSink` defaults to `keepalive: true`; new `beaconSink` for browsers

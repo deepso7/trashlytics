@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   createTracker,
   event,
+  SinkError,
   type StandardResult,
   type StandardSchemaV1,
   type TrackedEvent,
@@ -296,6 +297,31 @@ describe("tracker", () => {
 
     expect(errors).toHaveLength(1);
     expect(errors[0]?.[1]).toMatchObject([{ key: "signup" }]);
+  });
+
+  it("close() stays bounded when the sink never settles", async () => {
+    const errors: unknown[] = [];
+    const tracker = createTracker({
+      events,
+      batchSize: 1,
+      deliveryTimeout: 20,
+      flushInterval: 0,
+      onError: (error) => errors.push(error),
+      sink: () =>
+        new Promise<void>(() => {
+          // Never settles.
+        }),
+    });
+
+    tracker.track("signup", { userId: "u_1", plan: "free" });
+
+    await tracker.close();
+
+    expect(errors.length).toBeGreaterThanOrEqual(1);
+    expect(errors[0]).toBeInstanceOf(SinkError);
+    expect(String((errors[0] as SinkError).cause)).toContain(
+      "did not complete within 20ms"
+    );
   });
 
   it("does not drop an in-flight batch when closed mid-delivery", async () => {

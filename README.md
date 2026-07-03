@@ -177,6 +177,7 @@ const AnalyticsLayer = Layer.effect(Analytics, Tracker.make({ events, sink }))
 | --- | --- | --- |
 | `batchSize` | `20` | Max events per sink call. Reaching it triggers background delivery. |
 | `flushInterval` | `5000` | Auto-flush interval in ms. `0` disables interval flushing. |
+| `deliveryTimeout` | `30000` | Max ms per sink call before the attempt is failed (and retried per `retry`). Keeps `flush`/`close` bounded even if a sink never settles. `0` disables. |
 | `maxQueueSize` | `1000` | Max queued events; beyond it new events are rejected. |
 | `retry` | none | Retry count or `{ attempts, delay, factor, jitter }`. |
 | `context` | none | Static or lazy metadata merged into every event's `meta`. |

@@ -398,6 +398,13 @@ export interface TrackerOptions<
    * Per-event metadata wins on key conflicts.
    */
   readonly context?: EventMeta | (() => EventMeta);
+  /**
+   * Maximum time in milliseconds a single sink call may take before it is
+   * interrupted and treated as a failed delivery attempt (subject to the
+   * retry policy). Keeps `flush` and shutdown bounded even when a sink never
+   * settles. Set to 0 to disable. Defaults to 30000.
+   */
+  readonly deliveryTimeout?: number;
   /** Event definitions accepted by this tracker. */
   readonly events: Events;
   /**
@@ -459,8 +466,12 @@ export interface Tracker<
   Error = never,
   Requirements = never,
 > {
-  /** Delivers all currently queued events and waits for completion. */
-  readonly flush: Effect.Effect<void, Error, Requirements>;
+  /**
+   * Delivers all currently queued events and waits for completion. Fails with
+   * the sink's error, or `SinkError` when a delivery attempt exceeds
+   * `deliveryTimeout`.
+   */
+  readonly flush: Effect.Effect<void, Error | SinkError, Requirements>;
   /** Number of events currently queued. */
   readonly size: Effect.Effect<number>;
   /**
@@ -477,7 +488,7 @@ export interface Tracker<
     ...args: TrackArgs<Events[Key]>
   ) => Effect.Effect<
     void,
-    Exclude<TrackError, QueueFullError> | Error,
+    Exclude<TrackError, QueueFullError> | Error | SinkError,
     Requirements
   >;
 }
@@ -485,6 +496,7 @@ export interface Tracker<
 const DEFAULT_BATCH_SIZE = 20;
 const DEFAULT_MAX_QUEUE_SIZE = 1000;
 const DEFAULT_FLUSH_INTERVAL = 5000;
+const DEFAULT_DELIVERY_TIMEOUT = 30_000;
 const DEFAULT_RETRY_DELAY = 250;
 const DEFAULT_RETRY_FACTOR = 2;
 
@@ -513,14 +525,36 @@ export function make<
     const batchSize = options.batchSize ?? DEFAULT_BATCH_SIZE;
     const maxQueueSize = options.maxQueueSize ?? DEFAULT_MAX_QUEUE_SIZE;
     const flushInterval = options.flushInterval ?? DEFAULT_FLUSH_INTERVAL;
+    const deliveryTimeout = options.deliveryTimeout ?? DEFAULT_DELIVERY_TIMEOUT;
     const retry = normalizeRetry(options.retry);
     const queue = yield* Queue.dropping<TrackedEvent<Events>>(maxQueueSize);
     const wakeWorker = Latch.makeUnsafe(false);
     const deliveryLock = Semaphore.makeUnsafe(1);
     let closed = false;
 
+    // A single delivery attempt. Bounded by deliveryTimeout so a sink that
+    // never settles cannot hang flush or shutdown; the attempt window is
+    // explicitly interruptible so the timeout works even inside the
+    // uninterruptible drain loop.
+    const attemptDelivery = (
+      batch: readonly TrackedEvent<Events>[]
+    ): Effect.Effect<void, Error | SinkError, Requirements> =>
+      deliveryTimeout > 0
+        ? Effect.interruptible(
+            Effect.timeoutOrElse(options.sink(batch), {
+              duration: Duration.millis(deliveryTimeout),
+              orElse: () =>
+                new SinkError({
+                  cause: new Error(
+                    `Sink did not complete within ${deliveryTimeout}ms`
+                  ),
+                }),
+            })
+          )
+        : options.sink(batch);
+
     const deliver = (batch: readonly TrackedEvent<Events>[]) =>
-      Effect.retry(options.sink(batch), {
+      Effect.retry(attemptDelivery(batch), {
         times: retry.attempts,
         schedule: retry.jitter
           ? Schedule.jittered(
@@ -530,7 +564,11 @@ export function make<
       }).pipe(
         Effect.tapCause((cause) =>
           Effect.sync(() => {
-            options.onError?.(Cause.squash(cause), batch);
+            try {
+              options.onError?.(Cause.squash(cause), batch);
+            } catch {
+              // onError is an observer; its failures must not affect delivery.
+            }
           })
         )
       );
@@ -554,9 +592,10 @@ export function make<
     // Serialized with trackNow so batches reach the sink in order. A batch
     // that fails after all retries is reported via onError and dropped;
     // events still in the queue stay queued for the next attempt.
-    // Uninterruptible so that closing the scope cannot interrupt the worker
-    // between taking a batch off the queue and delivering it — an in-flight
-    // batch always completes (or exhausts its retries) before shutdown.
+    // Uninterruptible so an in-flight batch always completes (or exhausts its
+    // retries) before shutdown. The delivery-timeout window inside deliver is
+    // the one interruptible gap; if an interrupt lands there (e.g. a caller
+    // interrupts flush), the dequeued batch is put back so it is not lost.
     const drain = deliveryLock.withPermit(
       Effect.uninterruptible(
         Effect.gen(function* () {
@@ -567,7 +606,13 @@ export function make<
               return;
             }
 
-            yield* deliver(batch);
+            yield* deliver(batch).pipe(
+              Effect.onInterrupt(() =>
+                Effect.sync(() => {
+                  Queue.offerAllUnsafe(queue, batch);
+                })
+              )
+            );
           }
         })
       )
@@ -588,10 +633,13 @@ export function make<
       }
     });
 
-    // Finalizers run in reverse order: mark closed, interrupt the worker
-    // (registered by forkScoped), then flush whatever is still queued.
-    yield* Effect.addFinalizer(() => drainSilently);
+    // Finalizers run in reverse order of registration: mark closed (so no new
+    // events are accepted), flush everything still queued (the delivery lock
+    // makes this wait for any in-flight worker delivery first), and only then
+    // interrupt the now-idle worker. Interrupting last means shutdown never
+    // cancels a delivery mid-flight.
     yield* Effect.forkScoped(worker);
+    yield* Effect.addFinalizer(() => drainSilently);
     yield* Effect.addFinalizer(() =>
       Effect.sync(() => {
         closed = true;

@@ -100,6 +100,29 @@ describe("effect tracker", () => {
     expect(attempts).toBe(3);
   });
 
+  it("fails trackNow with the typed sink error even when onError throws", async () => {
+    const error = await Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const tracker = yield* make({
+            events,
+            flushInterval: 0,
+            onError: () => {
+              throw new Error("observer boom");
+            },
+            sink: () => Effect.fail(new SinkError({ cause: "down" })),
+          });
+
+          return yield* tracker
+            .trackNow("signup", { userId: "u_1", plan: "free" })
+            .pipe(Effect.flip);
+        })
+      )
+    );
+
+    expect(error).toBeInstanceOf(SinkError);
+  });
+
   it("does not drop an in-flight batch when the scope closes", async () => {
     const delivered: TrackedEvent<typeof events>[] = [];
     const sinkStarted = Latch.makeUnsafe(false);
