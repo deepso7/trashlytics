@@ -295,6 +295,37 @@ describe("tracker", () => {
     expect(batches).toHaveLength(1);
   });
 
+  it("waits for async validation before flush and close", async () => {
+    const asyncSchema: StandardSchemaV1<unknown, { userId: string }> = {
+      "~standard": {
+        version: 1,
+        vendor: "test",
+        validate: async (value) => {
+          await new Promise((resolve) => setTimeout(resolve, 20));
+
+          return { value: value as { userId: string } };
+        },
+      },
+    };
+
+    const asyncEvents = { identified: event("user.identified", asyncSchema) };
+    const batches: (readonly TrackedEvent<typeof asyncEvents>[])[] = [];
+    const tracker = createTracker({
+      events: asyncEvents,
+      flushInterval: 0,
+      sink: (batch) => {
+        batches.push(batch);
+      },
+    });
+
+    tracker.track("identified", { userId: "u_1" });
+
+    await tracker.close();
+
+    expect(batches).toHaveLength(1);
+    expect(batches[0]).toMatchObject([{ payload: { userId: "u_1" } }]);
+  });
+
   it("reports interval flush failures with the failed batch", async () => {
     const errors: [unknown, unknown][] = [];
     const tracker = createTracker({

@@ -114,7 +114,20 @@ export function createTracker<const Events extends EventsMap>(
     Scope.provide(make({ ...options, sink: adaptSink(options.sink) }), scope)
   );
 
-  const flush = () => Effect.runPromise(tracker.flush);
+  // In-flight fire-and-forget track() calls (e.g. awaiting async Standard
+  // Schema validation). flush() and close() wait for these so events tracked
+  // before the call cannot be lost.
+  const inFlight = new Set<Promise<void>>();
+  const settleInFlight = async () => {
+    while (inFlight.size > 0) {
+      await Promise.allSettled([...inFlight]);
+    }
+  };
+
+  const flush = async () => {
+    await settleInFlight();
+    await Effect.runPromise(tracker.flush);
+  };
 
   const detachLifecycle = attachLifecycleFlush(
     options.flushOnHide ?? true,
@@ -127,9 +140,10 @@ export function createTracker<const Events extends EventsMap>(
 
   let closing: Promise<void> | undefined;
   const close = () => {
-    closing ??= (() => {
+    closing ??= (async () => {
       detachLifecycle();
-      return Effect.runPromise(Scope.close(scope, Exit.void));
+      await settleInFlight();
+      await Effect.runPromise(Scope.close(scope, Exit.void));
     })();
 
     return closing;
@@ -137,9 +151,17 @@ export function createTracker<const Events extends EventsMap>(
 
   return {
     track: (key, ...args) => {
-      Effect.runPromise(tracker.track(key, ...args)).catch((error) => {
-        options.onError?.(error);
-      });
+      const pending: Promise<void> = Effect.runPromise(
+        tracker.track(key, ...args)
+      )
+        .catch((error) => {
+          options.onError?.(error);
+        })
+        .finally(() => {
+          inFlight.delete(pending);
+        });
+
+      inFlight.add(pending);
     },
 
     trackNow: (key, ...args) =>
