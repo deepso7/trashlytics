@@ -6,7 +6,7 @@ import type {
   TrackArgs,
   TrackedEvent,
 } from "./effect";
-import { make, SinkError } from "./effect";
+import { make, SinkError, TrackerClosedError } from "./effect";
 
 // Runtime support for `await using` on platforms that predate the explicit
 // resource management proposal.
@@ -151,6 +151,13 @@ export function createTracker<const Events extends EventsMap>(
 
   return {
     track: (key, ...args) => {
+      // Hard barrier: once close() has been called, no new tracking work is
+      // started, so close() cannot race a late enqueue.
+      if (closing !== undefined) {
+        options.onError?.(new TrackerClosedError());
+        return;
+      }
+
       const pending: Promise<void> = Effect.runPromise(
         tracker.track(key, ...args)
       )
@@ -165,7 +172,9 @@ export function createTracker<const Events extends EventsMap>(
     },
 
     trackNow: (key, ...args) =>
-      Effect.runPromise(tracker.trackNow(key, ...args)),
+      closing === undefined
+        ? Effect.runPromise(tracker.trackNow(key, ...args))
+        : Promise.reject(new TrackerClosedError()),
 
     flush,
 

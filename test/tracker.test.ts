@@ -6,6 +6,7 @@ import {
   type StandardResult,
   type StandardSchemaV1,
   type TrackedEvent,
+  TrackerClosedError,
 } from "../src/index";
 
 const events = {
@@ -361,5 +362,36 @@ describe("tracker", () => {
     tracker.track("signup", { userId: "u_1", plan: "free" });
 
     await waitFor(() => errors.length === 1);
+    expect(errors[0]).toBeInstanceOf(TrackerClosedError);
+  });
+
+  it("rejects tracking while close is in progress", async () => {
+    const errors: unknown[] = [];
+    const delivered: TrackedEvent<typeof events>[] = [];
+    const tracker = createTracker({
+      events,
+      flushInterval: 0,
+      onError: (error) => errors.push(error),
+      sink: async (batch) => {
+        await new Promise((resolve) => setTimeout(resolve, 10));
+        delivered.push(...batch);
+      },
+    });
+
+    tracker.track("signup", { userId: "u_1", plan: "free" });
+
+    const closed = tracker.close();
+
+    tracker.track("signup", { userId: "u_2", plan: "pro" });
+    await expect(
+      tracker.trackNow("signup", { userId: "u_3", plan: "pro" })
+    ).rejects.toBeInstanceOf(TrackerClosedError);
+
+    await closed;
+
+    expect(errors).toHaveLength(1);
+    expect(errors[0]).toBeInstanceOf(TrackerClosedError);
+    expect(delivered).toHaveLength(1);
+    expect(delivered[0]).toMatchObject({ payload: { userId: "u_1" } });
   });
 });
