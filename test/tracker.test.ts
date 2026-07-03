@@ -279,6 +279,52 @@ describe("tracker", () => {
     expect(attempts).toBe(3);
   });
 
+  it("reports trackNow delivery failures to onError", async () => {
+    const errors: [unknown, unknown][] = [];
+    await using tracker = createTracker({
+      events,
+      flushInterval: 0,
+      onError: (error, batch) => errors.push([error, batch]),
+      sink: () => {
+        throw new Error("delivery down");
+      },
+    });
+
+    await expect(
+      tracker.trackNow("signup", { userId: "u_1", plan: "free" })
+    ).rejects.toThrow();
+
+    expect(errors).toHaveLength(1);
+    expect(errors[0]?.[1]).toMatchObject([{ key: "signup" }]);
+  });
+
+  it("does not drop an in-flight batch when closed mid-delivery", async () => {
+    const delivered: TrackedEvent<typeof events>[] = [];
+    let signalStarted = () => {
+      // Reassigned below.
+    };
+    const sinkStarted = new Promise<void>((resolve) => {
+      signalStarted = resolve;
+    });
+    const tracker = createTracker({
+      events,
+      batchSize: 1,
+      flushInterval: 0,
+      sink: async (batch) => {
+        signalStarted();
+        await new Promise((resolve) => setTimeout(resolve, 30));
+        delivered.push(...batch);
+      },
+    });
+
+    tracker.track("signup", { userId: "u_1", plan: "free" });
+
+    await sinkStarted;
+    await tracker.close();
+
+    expect(delivered).toHaveLength(1);
+  });
+
   it("flushes remaining events on close", async () => {
     const batches: (readonly TrackedEvent<typeof events>[])[] = [];
     const tracker = createTracker({

@@ -8,11 +8,13 @@ import type {
 } from "./effect";
 import { make, SinkError, TrackerClosedError } from "./effect";
 
-// Runtime support for `await using` on platforms that predate the explicit
-// resource management proposal.
-(Symbol as { asyncDispose?: symbol }).asyncDispose ??= Symbol.for(
-  "Symbol.asyncDispose"
-);
+// Key used for `await using` support. Falls back to the registered symbol on
+// platforms that predate explicit resource management — the same fallback
+// TypeScript's downlevel helpers use — without mutating the Symbol global
+// (this module declares `sideEffects: false`).
+const asyncDispose: typeof Symbol.asyncDispose =
+  Symbol.asyncDispose ??
+  (Symbol.for("Symbol.asyncDispose") as typeof Symbol.asyncDispose);
 
 export type {
   EventDefinition,
@@ -180,7 +182,7 @@ export function createTracker<const Events extends EventsMap>(
 
     close,
 
-    [Symbol.asyncDispose]: close,
+    [asyncDispose]: close,
   };
 }
 

@@ -132,7 +132,7 @@ In browsers, the tracker automatically flushes when the page is hidden or unload
 
 ## Errors
 
-All failures are tagged: `EventValidationError`, `UnknownEventError`, `TrackerClosedError`, `QueueFullError`, `SinkError`. Validation and background delivery failures are reported through `onError`; `trackNow` and `flush` reject with the failure.
+All failures are tagged: `EventValidationError`, `UnknownEventError`, `TrackerClosedError`, `QueueFullError`, `SinkError`. `onError` observes every delivery failure (from background flushing, `flush`, and `trackNow`) plus validation failures from fire-and-forget `track`; `trackNow` and `flush` additionally reject with the failure so callers can react.
 
 ## Effect-Native API
 
@@ -164,9 +164,9 @@ const program = Effect.gen(function* () {
 To share a tracker across your app, wrap it in a Layer:
 
 ```ts
-import { Layer, ServiceMap } from "effect"
+import { Context, Layer } from "effect"
 
-class Analytics extends ServiceMap.Key<Analytics, Tracker.Tracker<typeof events>>()("Analytics") {}
+class Analytics extends Context.Service<Analytics, Tracker.Tracker<typeof events>>()("Analytics") {}
 
 const AnalyticsLayer = Layer.effect(Analytics, Tracker.make({ events, sink }))
 ```

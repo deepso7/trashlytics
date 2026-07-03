@@ -527,7 +527,13 @@ export function make<
               Schedule.exponential(Duration.millis(retry.delay), retry.factor)
             )
           : Schedule.exponential(Duration.millis(retry.delay), retry.factor),
-      });
+      }).pipe(
+        Effect.tapCause((cause) =>
+          Effect.sync(() => {
+            options.onError?.(Cause.squash(cause), batch);
+          })
+        )
+      );
 
     const takeBatch = Effect.gen(function* () {
       const batch: TrackedEvent<Events>[] = [];
@@ -548,24 +554,23 @@ export function make<
     // Serialized with trackNow so batches reach the sink in order. A batch
     // that fails after all retries is reported via onError and dropped;
     // events still in the queue stay queued for the next attempt.
+    // Uninterruptible so that closing the scope cannot interrupt the worker
+    // between taking a batch off the queue and delivering it — an in-flight
+    // batch always completes (or exhausts its retries) before shutdown.
     const drain = deliveryLock.withPermit(
-      Effect.gen(function* () {
-        while (true) {
-          const batch = yield* takeBatch;
+      Effect.uninterruptible(
+        Effect.gen(function* () {
+          while (true) {
+            const batch = yield* takeBatch;
 
-          if (batch.length === 0) {
-            return;
+            if (batch.length === 0) {
+              return;
+            }
+
+            yield* deliver(batch);
           }
-
-          yield* deliver(batch).pipe(
-            Effect.tapCause((cause) =>
-              Effect.sync(() => {
-                options.onError?.(Cause.squash(cause), batch);
-              })
-            )
-          );
-        }
-      })
+        })
+      )
     );
 
     const drainSilently = drain.pipe(Effect.catchCause(() => Effect.void));

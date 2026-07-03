@@ -1,4 +1,4 @@
-import { Effect, Schema } from "effect";
+import { Effect, Latch, Schema } from "effect";
 import { describe, expect, it } from "vitest";
 import {
   EventValidationError,
@@ -98,6 +98,35 @@ describe("effect tracker", () => {
     );
 
     expect(attempts).toBe(3);
+  });
+
+  it("does not drop an in-flight batch when the scope closes", async () => {
+    const delivered: TrackedEvent<typeof events>[] = [];
+    const sinkStarted = Latch.makeUnsafe(false);
+
+    await Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const tracker = yield* make({
+            events,
+            batchSize: 1,
+            flushInterval: 0,
+            sink: (batch) =>
+              Effect.gen(function* () {
+                sinkStarted.openUnsafe();
+                yield* Effect.sleep(30);
+                delivered.push(...batch);
+              }),
+          });
+
+          yield* tracker.track("signup", { userId: "u_1", plan: "free" });
+          // Leave the scope while the background worker is mid-delivery.
+          yield* sinkStarted.await;
+        })
+      )
+    );
+
+    expect(delivered).toHaveLength(1);
   });
 
   it("flushes remaining events when the scope closes", async () => {
