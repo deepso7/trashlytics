@@ -9,6 +9,52 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # Cover the advertised engines.node `>=20` range.
+        node-version: [20, 24]
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node-version }}
+          cache: "pnpm"
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Check
+        run: pnpm run check
+
+      - name: Build
+        run: pnpm run build
+
+      - name: Lint published package
+        run: pnpm run publint
+
+      - name: Check published types
+        run: pnpm run test:types
+
+      - name: Test
+        run: pnpm run test
+
+  # Exercises the advertised `effect` peer (`>=4.0.0-rc.113 <5`) by installing
+  # each matrix version over the lockfile pin. Only rc.113 is published in-range
+  # today; add newer 4.x entries as they ship.
+  effect-peer:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        effect: ["4.0.0-rc.113"]
 
     steps:
       - name: Checkout
@@ -26,17 +72,11 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
-      - name: Check
-        run: pnpm run check
+      - name: Install effect ${{ matrix.effect }}
+        run: pnpm add -D effect@${{ matrix.effect }} @effect/vitest@${{ matrix.effect }}
 
       - name: Build
         run: pnpm run build
-
-      - name: Lint published package
-        run: pnpm run publint
-
-      - name: Check published types
-        run: pnpm run test:types
 
       - name: Test
         run: pnpm run test
