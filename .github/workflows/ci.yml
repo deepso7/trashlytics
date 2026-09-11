@@ -32,5 +32,11 @@ jobs:
       - name: Build
         run: pnpm run build
 
+      - name: Lint published package
+        run: pnpm run publint
+
+      - name: Check published types
+        run: pnpm run test:types
+
       - name: Test
         run: pnpm run test

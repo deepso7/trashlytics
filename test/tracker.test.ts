@@ -325,6 +325,112 @@ describe("tracker", () => {
     );
   });
 
+  it("honours retryable: false from a custom sink", async () => {
+    let attempts = 0;
+    await using tracker = createTracker({
+      events,
+      flushInterval: 0,
+      onError: () => {
+        // Failure is expected; assertions happen below.
+      },
+      retry: { attempts: 5, delay: 1, factor: 1 },
+      sink: () => {
+        attempts += 1;
+
+        return Promise.reject(
+          new SinkError({ cause: "rejected payload", retryable: false })
+        );
+      },
+    });
+
+    await expect(
+      tracker.trackNow("signup", { plan: "free", userId: "u_1" })
+    ).rejects.toBeInstanceOf(SinkError);
+
+    expect(attempts).toBe(1);
+  });
+
+  it("does not double-wrap a SinkError thrown by a custom sink", async () => {
+    const errors: unknown[] = [];
+    await using tracker = createTracker({
+      events,
+      flushInterval: 0,
+      onError: (error) => errors.push(error),
+      sink: () => {
+        throw new SinkError({ cause: "boom", retryable: false });
+      },
+    });
+
+    await expect(
+      tracker.trackNow("signup", { plan: "free", userId: "u_1" })
+    ).rejects.toBeInstanceOf(SinkError);
+
+    expect((errors[0] as SinkError).cause).toBe("boom");
+  });
+
+  it("reports queue size", async () => {
+    await using tracker = createTracker({
+      events,
+      flushInterval: 0,
+      sink: () => {
+        // Discard.
+      },
+    });
+
+    expect(tracker.size()).toBe(0);
+
+    tracker.track("signup", { plan: "free", userId: "u_1" });
+    await waitFor(() => tracker.size() === 1);
+
+    await tracker.flush();
+
+    expect(tracker.size()).toBe(0);
+  });
+
+  it("aborts the sink signal when a delivery times out", async () => {
+    let observed: AbortSignal | undefined;
+    const tracker = createTracker({
+      batchSize: 1,
+      deliveryTimeout: 20,
+      events,
+      flushInterval: 0,
+      onError: () => {
+        // Timeout is expected; assertions happen below.
+      },
+      sink: (_batch, signal) => {
+        observed = signal;
+
+        return new Promise<void>(() => {
+          // Never settles; the timeout must abandon and abort it.
+        });
+      },
+    });
+
+    tracker.track("signup", { plan: "free", userId: "u_1" });
+
+    await tracker.close();
+
+    expect(observed?.aborted).toBe(true);
+  });
+
+  it("does not abort the sink signal on a successful delivery", async () => {
+    let observed: AbortSignal | undefined;
+    await using tracker = createTracker({
+      events,
+      flushInterval: 0,
+      sink: (_batch, signal) => {
+        observed = signal;
+      },
+    });
+
+    tracker.track("signup", { plan: "free", userId: "u_1" });
+
+    await tracker.flush();
+
+    expect(observed).toBeInstanceOf(AbortSignal);
+    expect(observed?.aborted).toBe(false);
+  });
+
   it("does not drop an in-flight batch when closed mid-delivery", async () => {
     const delivered: TrackedEvent<typeof events>[] = [];
     let signalStarted = () => {

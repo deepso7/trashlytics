@@ -51,9 +51,15 @@ export {
  * May return `void`, a `Promise`, or an Effect — so the sinks exported from
  * this module ({@link httpSink}, {@link beaconSink}, {@link consoleSink}) and
  * plain async functions both work.
+ *
+ * The `signal` is aborted when the delivery is abandoned, either because the
+ * tracker's `deliveryTimeout` elapsed or because delivery was interrupted.
+ * Forward it to cancellable work (such as `fetch`) so abandoned deliveries do
+ * not keep running in the background.
  */
 export type Sink<Events extends EventsMap> = (
-  batch: readonly TrackedEvent<Events>[]
+  batch: readonly TrackedEvent<Events>[],
+  signal: AbortSignal
 ) => void | Promise<void> | Effect.Effect<void, unknown>;
 
 /**
@@ -86,6 +92,8 @@ export interface Tracker<Events extends EventsMap> extends AsyncDisposable {
   readonly close: () => Promise<void>;
   /** Delivers all currently queued events and waits for completion. */
   readonly flush: () => Promise<void>;
+  /** Number of events currently queued. */
+  readonly size: () => number;
   /**
    * Validates and queues an event for batched background delivery. Fire and
    * forget: it never throws and never waits on the sink. Validation and
@@ -157,6 +165,7 @@ export function createTracker<const Events extends EventsMap>(
     close,
 
     flush,
+    size: () => Effect.runSync(tracker.size),
     track: (key, ...args) => {
       // Hard barrier: once close() has been called, no new tracking work is
       // started, so close() cannot race a late enqueue.
@@ -190,29 +199,56 @@ export function createTracker<const Events extends EventsMap>(
 function adaptSink<Events extends EventsMap>(
   sink: Sink<Events>
 ): EffectSink<Events, unknown> {
+  // The signal is aborted only when the delivery is interrupted — which is how
+  // `deliveryTimeout` abandons a sink call — so a sink that completes normally
+  // never observes a spurious abort.
   return (batch) =>
     Effect.suspend(() => {
-      let result: ReturnType<Sink<Events>>;
+      const controller = new AbortController();
 
-      try {
-        result = sink(batch);
-      } catch (cause) {
-        return Effect.fail(new SinkError({ cause }));
-      }
-
-      if (Effect.isEffect(result)) {
-        return result;
-      }
-
-      if (result instanceof Promise) {
-        return Effect.tryPromise({
-          catch: (cause) => new SinkError({ cause }),
-          try: () => result as Promise<void>,
-        });
-      }
-
-      return Effect.void;
+      return callSink(sink, batch, controller.signal).pipe(
+        Effect.onInterrupt(() =>
+          Effect.sync(() => {
+            controller.abort();
+          })
+        )
+      );
     });
+}
+
+function callSink<Events extends EventsMap>(
+  sink: Sink<Events>,
+  batch: readonly TrackedEvent<Events>[],
+  signal: AbortSignal
+): Effect.Effect<void, unknown> {
+  return Effect.suspend(() => {
+    let result: ReturnType<Sink<Events>>;
+
+    try {
+      result = sink(batch, signal);
+    } catch (cause) {
+      return Effect.fail(toSinkError(cause));
+    }
+
+    if (Effect.isEffect(result)) {
+      return result;
+    }
+
+    if (result instanceof Promise) {
+      return Effect.tryPromise({
+        catch: toSinkError,
+        try: () => result as Promise<void>,
+      });
+    }
+
+    return Effect.void;
+  });
+}
+
+// A sink that already reports a SinkError is passed through, so its `retryable`
+// flag survives and the cause is not nested inside a second SinkError.
+function toSinkError(cause: unknown): SinkError {
+  return cause instanceof SinkError ? cause : new SinkError({ cause });
 }
 
 function attachLifecycleFlush(enabled: boolean, flush: () => void): () => void {

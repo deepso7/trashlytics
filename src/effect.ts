@@ -1,5 +1,6 @@
 import {
   Cause,
+  Clock,
   Data,
   Duration,
   Effect,
@@ -54,7 +55,9 @@ export interface StandardIssue {
 }
 
 type AnyEffectSchema = Schema.ConstraintDecoder<unknown, never>;
-type EventFields = Schema.Struct.Fields;
+// Field schemas must be service-free: payloads are validated through Standard
+// Schema, which has nowhere to provide decoding services from.
+type EventFields = Schema.Struct.Fields & Record<string, AnyEffectSchema>;
 
 /**
  * Any schema accepted as an event payload validator.
@@ -128,6 +131,13 @@ export class QueueFullError extends Data.TaggedError("QueueFullError")<{
  */
 export class SinkError extends Data.TaggedError("SinkError")<{
   readonly cause: unknown;
+  /**
+   * Whether redelivering the batch could succeed. Defaults to true, since most
+   * delivery failures are transient; set it to false for failures that will
+   * recur no matter how often the batch is resent, such as a rejected payload.
+   * Non-retryable failures skip the remaining `retry` attempts.
+   */
+  readonly retryable?: boolean;
 }> {}
 
 /**
@@ -146,11 +156,15 @@ export type TrackError =
 /**
  * Defines a trackable event: its public name and the schema used to validate
  * its payload. Created with {@link event}.
+ *
+ * Effect schemas are normalized to Standard Schema when the definition is
+ * built, so validation has a single code path regardless of which validator
+ * the event was declared with.
  */
 export interface EventDefinition<Name extends string, Payload> {
   readonly _payload?: Payload;
   readonly name: Name;
-  readonly schema: PayloadSchema | undefined;
+  readonly schema: StandardSchemaV1 | undefined;
 }
 
 /**
@@ -248,11 +262,24 @@ export function event(
     return { name, schema: undefined };
   }
 
-  if (isEffectSchema(schemaOrFields) || isStandardSchema(schemaOrFields)) {
+  if (isStandardSchema(schemaOrFields)) {
     return { name, schema: schemaOrFields };
   }
 
-  return { name, schema: Schema.Struct(schemaOrFields) };
+  // Effect schemas (and bare `Schema.Struct` fields) are converted up front so
+  // validatePayload only ever deals with Standard Schema.
+  //
+  // The narrowing is needed because `Struct`'s decoding services are a deferred
+  // mapped type that TypeScript cannot reduce to `never` for the unresolved
+  // fields of this loose implementation signature. The public overloads
+  // constrain fields to service-free schemas, which is what makes it sound.
+  const effectSchema = (
+    isEffectSchema(schemaOrFields)
+      ? schemaOrFields
+      : Schema.Struct(schemaOrFields)
+  ) as AnyEffectSchema;
+
+  return { name, schema: Schema.toStandardSchemaV1(effectSchema) };
 }
 
 // -----------------------------------------------------------------------------
@@ -287,7 +314,10 @@ export function consoleSink<Events extends EventsMap>(
 /**
  * Fetch options accepted by {@link httpSink}.
  */
-export type HttpSinkOptions = Omit<RequestInit, "body" | "method"> & {
+export type HttpSinkOptions = Omit<
+  RequestInit,
+  "body" | "method" | "signal"
+> & {
   /** HTTP method used to deliver batches. Defaults to `POST`. */
   readonly method?: "POST" | "PUT" | "PATCH";
   /** Custom fetch implementation. Defaults to `globalThis.fetch`. */
@@ -300,6 +330,10 @@ export type HttpSinkOptions = Omit<RequestInit, "body" | "method"> & {
  * `keepalive` defaults to `true` so in-flight batches survive page unloads in
  * browsers. Note that browsers cap keepalive request bodies at ~64KB.
  *
+ * The request is aborted if the delivery is interrupted or exceeds the
+ * tracker's `deliveryTimeout`, so `signal` is managed here and cannot be
+ * supplied through `options`.
+ *
  * @param url - HTTP endpoint that receives event batches.
  * @param options - Fetch options and optional delivery method.
  */
@@ -311,27 +345,44 @@ export function httpSink<Events extends EventsMap>(
 
   return (batch) =>
     Effect.tryPromise({
+      // Transport failures (network down, aborted request) are transient.
       catch: (cause) => new SinkError({ cause }),
-      try: async () => {
+      try: (signal) => {
         const headers = new Headers(init.headers);
 
         if (!headers.has("content-type")) {
           headers.set("content-type", "application/json");
         }
 
-        const response = await (fetchImpl ?? globalThis.fetch)(url, {
+        return (fetchImpl ?? globalThis.fetch)(url, {
           keepalive: true,
           ...init,
           body: JSON.stringify(batch),
           headers,
           method: method ?? "POST",
+          signal,
         });
-
-        if (!response.ok) {
-          throw new Error(`HTTP sink failed with status ${response.status}`);
-        }
       },
-    });
+    }).pipe(
+      Effect.flatMap((response) =>
+        response.ok
+          ? Effect.void
+          : Effect.fail(
+              new SinkError({
+                cause: new Error(
+                  `HTTP sink failed with status ${response.status}`
+                ),
+                // A rejected payload stays rejected however often it is resent,
+                // so only transient statuses are worth retrying: request
+                // timeouts, rate limiting, and server faults.
+                retryable:
+                  response.status === 408 ||
+                  response.status === 429 ||
+                  response.status >= 500,
+              })
+            )
+      )
+    );
 }
 
 /**
@@ -439,8 +490,8 @@ export interface TrackOptions {
   /** Metadata merged onto the tracked event (over tracker `context`). */
   readonly meta?: EventMeta;
   /**
-   * Event timestamp in milliseconds since the Unix epoch. Defaults to
-   * `Date.now()`.
+   * Event timestamp in milliseconds since the Unix epoch. Defaults to the
+   * current time read from the Effect `Clock`.
    */
   readonly timestamp?: number;
 }
@@ -561,6 +612,7 @@ export function make<
             )
           : Schedule.exponential(Duration.millis(retry.delay), retry.factor),
         times: retry.attempts,
+        while: isRetryable,
       }).pipe(
         Effect.tapCause((cause) =>
           Effect.sync(() => {
@@ -648,7 +700,9 @@ export function make<
       })
     );
 
-    const makeEvent = Effect.fn("trashlytics.makeEvent")(function* (
+    // Untraced: this runs on every tracked event, and a span per event is
+    // measurably more expensive than the work it describes.
+    const makeEvent = Effect.fnUntraced(function* (
       key: keyof Events & string,
       payload: unknown,
       trackOptions: TrackOptions | undefined
@@ -670,14 +724,14 @@ export function make<
         key,
         name: definition.name,
         payload: decoded as EventPayload<Events[keyof Events & string]>,
-        timestamp: trackOptions?.timestamp ?? Date.now(),
+        timestamp: trackOptions?.timestamp ?? (yield* Clock.currentTimeMillis),
         ...(meta === undefined ? {} : { meta }),
       };
 
       return trackedEvent;
     });
 
-    const track = Effect.fn("trashlytics.track")(function* (
+    const track = Effect.fnUntraced(function* (
       key: keyof Events & string,
       payload?: unknown,
       trackOptions?: TrackOptions
@@ -719,25 +773,12 @@ export function make<
 // -----------------------------------------------------------------------------
 
 function validatePayload(
-  schema: PayloadSchema | undefined,
+  schema: StandardSchemaV1 | undefined,
   key: string,
   payload: unknown
 ): Effect.Effect<unknown, EventValidationError> {
   if (schema === undefined) {
     return Effect.void;
-  }
-
-  if (isEffectSchema(schema)) {
-    return Schema.decodeUnknownEffect(schema)(payload).pipe(
-      Effect.mapError(
-        (error) =>
-          new EventValidationError({
-            cause: error,
-            issues: [{ message: error.message }],
-            key,
-          })
-      )
-    );
   }
 
   const toEffect = (
@@ -802,6 +843,11 @@ function normalizeRetry(retry: number | RetryPolicy | undefined) {
     jitter: retry?.jitter ?? false,
   };
 }
+
+// Failures are retried unless they identify themselves as permanent, so a sink
+// with its own error type keeps the previous retry-everything behaviour.
+const isRetryable = (error: unknown) =>
+  !(error instanceof SinkError) || error.retryable !== false;
 
 const isEffectSchema = (value: unknown): value is AnyEffectSchema =>
   (typeof value === "object" || typeof value === "function") &&

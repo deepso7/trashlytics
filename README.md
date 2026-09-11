@@ -94,6 +94,8 @@ type Event = {
 }
 ```
 
+`timestamp` is read from the Effect `Clock`, so it can be controlled in tests; pass `{ timestamp }` per event to override it.
+
 `meta` is the tracker-level `context` (static object or lazy function) merged with per-event metadata:
 
 ```ts
@@ -107,9 +109,25 @@ A sink is just a function receiving batches. It can return `void`, a `Promise`, 
 - `httpSink(url, options?)` — POSTs JSON batches with `fetch`. `keepalive` defaults to `true` so requests survive page unloads.
 - `beaconSink(url)` — delivers with `navigator.sendBeacon` (browsers).
 - `consoleSink()` — logs batches.
-- Any custom function: `sink: async (batch) => { ... }`.
+- Any custom function: `sink: async (batch, signal) => { ... }`.
 
 Failed deliveries are retried per the `retry` policy; batches that still fail are reported to `onError` and dropped.
+
+Retries only continue while redelivery could plausibly succeed. `httpSink` retries `408`, `429` and `5xx` responses plus transport errors, and gives up immediately on other `4xx` responses — resending a payload the server rejected only delays the batches behind it. Custom sinks can say the same by failing with `new SinkError({ cause, retryable: false })`.
+
+The second argument is an `AbortSignal` that is aborted when a delivery is abandoned, either because `deliveryTimeout` elapsed or because delivery was interrupted. Forward it to cancellable work so abandoned deliveries stop consuming resources:
+
+```ts
+sink: async (batch, signal) => {
+  await fetch("/api/events", {
+    method: "POST",
+    body: JSON.stringify(batch),
+    signal
+  })
+}
+```
+
+It is never aborted after a sink completes normally, so `signal.aborted` is a truthful answer to "was this delivery abandoned?". Sinks on the Effect entry observe abandonment through interruption instead and take no `signal` argument.
 
 ## Immediate Delivery
 
@@ -130,9 +148,22 @@ await using tracker = createTracker({ events, sink })
 
 In browsers, the tracker automatically flushes when the page is hidden or unloading (`visibilitychange`/`pagehide`). Disable with `flushOnHide: false`.
 
+`size()` reports how many events are queued, which is useful for observing backpressure before `maxQueueSize` starts rejecting events (`tracker.size` on the Effect entry).
+
 ## Errors
 
 All failures are tagged: `EventValidationError`, `UnknownEventError`, `TrackerClosedError`, `QueueFullError`, `SinkError`. `onError` observes every delivery failure (from background flushing, `flush`, and `trackNow`) plus validation failures from fire-and-forget `track`; `trackNow` and `flush` additionally reject with the failure so callers can react.
+
+`EventValidationError.issues` carries one entry per invalid field, with the path to it, whichever validator declared the event:
+
+```ts
+tracker.track("signup", { userId: 42, plan: "enterprise" })
+// EventValidationError.issues ->
+// [
+//   { message: "Expected string", path: ["userId"] },
+//   { message: 'Expected "free" | "pro"', path: ["plan"] }
+// ]
+```
 
 ## Effect-Native API
 

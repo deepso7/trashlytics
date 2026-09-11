@@ -1,8 +1,10 @@
-import { Effect, Latch, Schema } from "effect";
-import { describe, expect, it } from "vitest";
+import { assert, describe, it } from "@effect/vitest";
+import { Effect, Exit, Fiber, Latch, Schema, Scope } from "effect";
+import { TestClock } from "effect/testing";
 import {
   EventValidationError,
   event,
+  httpSink,
   make,
   type Sink,
   SinkError,
@@ -27,136 +29,207 @@ const collectingSink = () => {
 };
 
 describe("effect tracker", () => {
-  it("exposes Effect-native tracker operations", async () => {
-    const { batches, sink } = collectingSink();
+  it.effect("exposes Effect-native tracker operations", () =>
+    Effect.gen(function* () {
+      const { batches, sink } = collectingSink();
+      const tracker = yield* make({ events, flushInterval: 0, sink });
 
-    await Effect.runPromise(
-      Effect.scoped(
-        Effect.gen(function* () {
-          const tracker = yield* make({ events, flushInterval: 0, sink });
+      yield* tracker.track("signup", { plan: "free", userId: "u_1" });
+      yield* tracker.flush;
 
-          yield* tracker.track("signup", { plan: "free", userId: "u_1" });
-          yield* tracker.flush;
-        })
-      )
-    );
+      assert.strictEqual(batches.length, 1);
+      assert.strictEqual(batches[0]?.[0]?.key, "signup");
+      assert.strictEqual(batches[0]?.[0]?.name, "user.signup");
+      assert.deepStrictEqual(batches[0]?.[0]?.payload, {
+        plan: "free",
+        userId: "u_1",
+      });
+    })
+  );
 
-    expect(batches).toHaveLength(1);
-    expect(batches[0]).toMatchObject([
-      {
-        key: "signup",
-        name: "user.signup",
-        payload: { plan: "free", userId: "u_1" },
-      },
-    ]);
-  });
+  it.effect("fails track with EventValidationError on invalid payloads", () =>
+    Effect.gen(function* () {
+      const { sink } = collectingSink();
+      const tracker = yield* make({ events, flushInterval: 0, sink });
 
-  it("fails track with EventValidationError on invalid payloads", async () => {
-    const { sink } = collectingSink();
+      const error = yield* tracker
+        .track("signup", { plan: "enterprise", userId: "u_1" } as never)
+        .pipe(Effect.flip);
 
-    const error = await Effect.runPromise(
-      Effect.scoped(
-        Effect.gen(function* () {
-          const tracker = yield* make({ events, flushInterval: 0, sink });
+      assert.instanceOf(error, EventValidationError);
+      if (error instanceof EventValidationError) {
+        assert.strictEqual(error.key, "signup");
+      }
+    })
+  );
 
-          return yield* tracker
-            .track("signup", { plan: "enterprise", userId: "u_1" } as never)
-            .pipe(Effect.flip);
-        })
-      )
-    );
+  it.effect("reports one issue per invalid field, with paths", () =>
+    Effect.gen(function* () {
+      const { sink } = collectingSink();
+      const tracker = yield* make({ events, flushInterval: 0, sink });
 
-    expect(error).toBeInstanceOf(EventValidationError);
-    expect(error._tag).toBe("EventValidationError");
-    expect(error._tag === "EventValidationError" && error.key).toBe("signup");
-  });
+      const error = yield* tracker
+        .track("signup", { plan: "enterprise", userId: 42 } as never)
+        .pipe(Effect.flip);
 
-  it("retries sink failures", async () => {
-    let attempts = 0;
-    const sink: Sink<typeof events, SinkError> = () =>
-      Effect.suspend(() => {
-        attempts += 1;
+      assert.instanceOf(error, EventValidationError);
+      if (!(error instanceof EventValidationError)) {
+        return;
+      }
 
-        return attempts < 3
-          ? Effect.fail(new SinkError({ cause: "not yet" }))
-          : Effect.void;
+      assert.deepStrictEqual(
+        error.issues.map((issue) => issue.path),
+        [["plan"], ["userId"]]
+      );
+      assert.strictEqual(error.issues.length, 2);
+    })
+  );
+
+  // The retry schedule is clock-driven, so this runs against real services
+  // with a 1ms delay rather than adjusting TestClock between attempts.
+  it.live("retries sink failures", () =>
+    Effect.gen(function* () {
+      let attempts = 0;
+      const sink: Sink<typeof events, SinkError> = () =>
+        Effect.suspend(() => {
+          attempts += 1;
+
+          return attempts < 3
+            ? Effect.fail(new SinkError({ cause: "not yet" }))
+            : Effect.void;
+        });
+
+      const tracker = yield* make({
+        events,
+        flushInterval: 0,
+        retry: { attempts: 2, delay: 1, factor: 1 },
+        sink,
       });
 
-    await Effect.runPromise(
-      Effect.scoped(
-        Effect.gen(function* () {
-          const tracker = yield* make({
-            events,
-            flushInterval: 0,
-            retry: { attempts: 2, delay: 1, factor: 1 },
-            sink,
-          });
+      yield* tracker.trackNow("signup", { plan: "free", userId: "u_1" });
 
-          yield* tracker.trackNow("signup", { plan: "free", userId: "u_1" });
-        })
-      )
-    );
+      assert.strictEqual(attempts, 3);
+    })
+  );
 
-    expect(attempts).toBe(3);
-  });
+  it.live("does not retry a rejected payload", () =>
+    Effect.gen(function* () {
+      let attempts = 0;
+      const tracker = yield* make({
+        events,
+        flushInterval: 0,
+        retry: { attempts: 5, delay: 1, factor: 1 },
+        sink: httpSink("https://example.invalid/events", {
+          fetch: () => {
+            attempts += 1;
 
-  it("fails trackNow with the typed sink error even when onError throws", async () => {
-    const error = await Effect.runPromise(
-      Effect.scoped(
-        Effect.gen(function* () {
-          const tracker = yield* make({
-            events,
-            flushInterval: 0,
-            onError: () => {
-              throw new Error("observer boom");
+            return Promise.resolve(new Response(null, { status: 400 }));
+          },
+        }),
+      });
+
+      yield* tracker
+        .trackNow("signup", { plan: "free", userId: "u_1" })
+        .pipe(Effect.flip);
+
+      assert.strictEqual(attempts, 1);
+    })
+  );
+
+  it.live("retries transient HTTP failures", () =>
+    Effect.gen(function* () {
+      for (const status of [503, 429, 408]) {
+        let attempts = 0;
+        const tracker = yield* make({
+          events,
+          flushInterval: 0,
+          retry: { attempts: 2, delay: 1, factor: 1 },
+          sink: httpSink("https://example.invalid/events", {
+            fetch: () => {
+              attempts += 1;
+
+              return Promise.resolve(new Response(null, { status }));
             },
-            sink: () => Effect.fail(new SinkError({ cause: "down" })),
-          });
+          }),
+        });
 
-          return yield* tracker
-            .trackNow("signup", { plan: "free", userId: "u_1" })
-            .pipe(Effect.flip);
-        })
-      )
-    );
+        yield* tracker
+          .trackNow("signup", { plan: "free", userId: "u_1" })
+          .pipe(Effect.flip);
 
-    expect(error).toBeInstanceOf(SinkError);
-  });
+        assert.strictEqual(attempts, 3, `status ${status} should retry`);
+      }
+    })
+  );
 
-  it("does not drop an in-flight batch when the scope closes", async () => {
-    const delivered: TrackedEvent<typeof events>[] = [];
-    const sinkStarted = Latch.makeUnsafe(false);
+  it.effect(
+    "fails trackNow with the typed sink error even when onError throws",
+    () =>
+      Effect.gen(function* () {
+        const tracker = yield* make({
+          events,
+          flushInterval: 0,
+          onError: () => {
+            throw new Error("observer boom");
+          },
+          sink: () => Effect.fail(new SinkError({ cause: "down" })),
+        });
 
-    await Effect.runPromise(
-      Effect.scoped(
-        Effect.gen(function* () {
-          const tracker = yield* make({
-            batchSize: 1,
-            events,
-            flushInterval: 0,
-            sink: (batch) =>
-              Effect.gen(function* () {
-                sinkStarted.openUnsafe();
-                yield* Effect.sleep(30);
-                delivered.push(...batch);
-              }),
-          });
+        const error = yield* tracker
+          .trackNow("signup", { plan: "free", userId: "u_1" })
+          .pipe(Effect.flip);
 
-          yield* tracker.track("signup", { plan: "free", userId: "u_1" });
-          // Leave the scope while the background worker is mid-delivery.
-          yield* sinkStarted.await;
-        })
-      )
-    );
+        assert.instanceOf(error, SinkError);
+      })
+  );
 
-    expect(delivered).toHaveLength(1);
-  });
+  it.effect("does not drop an in-flight batch when the scope closes", () =>
+    Effect.gen(function* () {
+      const delivered: TrackedEvent<typeof events>[] = [];
+      const sinkStarted = yield* Latch.make();
+      const releaseDelivery = yield* Latch.make();
 
-  it("flushes remaining events when the scope closes", async () => {
-    const { batches, sink } = collectingSink();
+      // Own scope so the test controls when close begins; the sink blocks on
+      // releaseDelivery so close starts while delivery is mid-flight.
+      const scope = yield* Scope.make();
+      const tracker = yield* make({
+        batchSize: 1,
+        events,
+        flushInterval: 0,
+        sink: (batch) =>
+          Effect.gen(function* () {
+            yield* sinkStarted.open;
+            yield* releaseDelivery.await;
+            delivered.push(...batch);
+          }),
+      }).pipe(Scope.provide(scope));
 
-    await Effect.runPromise(
-      Effect.scoped(
+      yield* tracker.track("signup", { plan: "free", userId: "u_1" });
+      yield* sinkStarted.await;
+
+      // Close while the sink is blocked, then assert it is actually waiting on
+      // the in-flight delivery rather than having dropped the batch.
+      const closing = yield* Effect.forkChild(Scope.close(scope, Exit.void));
+      yield* Effect.yieldNow;
+
+      assert.strictEqual(delivered.length, 0, "delivery finished too early");
+      assert.isUndefined(
+        closing.pollUnsafe(),
+        "close did not wait for the in-flight delivery"
+      );
+
+      yield* releaseDelivery.open;
+      yield* Fiber.join(closing);
+
+      assert.strictEqual(delivered.length, 1);
+    })
+  );
+
+  it.effect("flushes remaining events when the scope closes", () =>
+    Effect.gen(function* () {
+      const { batches, sink } = collectingSink();
+
+      yield* Effect.scoped(
         Effect.gen(function* () {
           const tracker = yield* make({
             events,
@@ -166,48 +239,68 @@ describe("effect tracker", () => {
 
           yield* tracker.track("signup", { plan: "free", userId: "u_1" });
 
-          expect(batches).toHaveLength(0);
+          assert.strictEqual(batches.length, 0);
         })
-      )
-    );
+      );
 
-    expect(batches).toHaveLength(1);
-  });
+      assert.strictEqual(batches.length, 1);
+    })
+  );
 
-  it("reports queue size", async () => {
-    const { sink } = collectingSink();
+  it.effect("stamps timestamps from the Clock", () =>
+    Effect.gen(function* () {
+      const { batches, sink } = collectingSink();
+      const tracker = yield* make({ events, flushInterval: 0, sink });
 
-    const size = await Effect.runPromise(
-      Effect.scoped(
-        Effect.gen(function* () {
-          const tracker = yield* make({ events, flushInterval: 0, sink });
+      yield* TestClock.adjust("1 second");
+      yield* tracker.track("signup", { plan: "free", userId: "u_1" });
+      yield* tracker.flush;
 
-          yield* tracker.track("signup", { plan: "free", userId: "u_1" });
-          yield* tracker.track("signup", { plan: "pro", userId: "u_2" });
+      assert.strictEqual(batches[0]?.[0]?.timestamp, 1000);
+    })
+  );
 
-          return yield* tracker.size;
-        })
-      )
-    );
+  it.effect("prefers an explicit timestamp over the Clock", () =>
+    Effect.gen(function* () {
+      const { batches, sink } = collectingSink();
+      const tracker = yield* make({ events, flushInterval: 0, sink });
 
-    expect(size).toBe(2);
-  });
+      yield* tracker.track(
+        "signup",
+        { plan: "free", userId: "u_1" },
+        { timestamp: 42 }
+      );
+      yield* tracker.flush;
 
-  it("delivers on the flush interval without an explicit flush", async () => {
-    const { batches, sink } = collectingSink();
+      assert.strictEqual(batches[0]?.[0]?.timestamp, 42);
+    })
+  );
 
-    await Effect.runPromise(
-      Effect.scoped(
-        Effect.gen(function* () {
-          const tracker = yield* make({ events, flushInterval: 5, sink });
+  it.effect("reports queue size", () =>
+    Effect.gen(function* () {
+      const { sink } = collectingSink();
+      const tracker = yield* make({ events, flushInterval: 0, sink });
 
-          yield* tracker.track("signup", { plan: "free", userId: "u_1" });
+      yield* tracker.track("signup", { plan: "free", userId: "u_1" });
+      yield* tracker.track("signup", { plan: "pro", userId: "u_2" });
 
-          yield* Effect.sleep(50);
-        })
-      )
-    );
+      assert.strictEqual(yield* tracker.size, 2);
+    })
+  );
 
-    expect(batches).toHaveLength(1);
-  });
+  it.effect("delivers on the flush interval without an explicit flush", () =>
+    Effect.gen(function* () {
+      const { batches, sink } = collectingSink();
+      const tracker = yield* make({ events, flushInterval: 5, sink });
+
+      yield* tracker.track("signup", { plan: "free", userId: "u_1" });
+
+      // No explicit flush: advancing the clock past the interval must be
+      // enough for the background worker to drain the queue on its own.
+      yield* TestClock.adjust("5 millis");
+
+      assert.strictEqual(batches.length, 1);
+      assert.strictEqual(yield* tracker.size, 0);
+    })
+  );
 });
