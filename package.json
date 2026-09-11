@@ -10,10 +10,10 @@
   ],
   "repository": {
     "type": "git",
-    "url": "https://github.com/deepso7/trashlytics"
+    "url": "git+https://github.com/deepso7/trashlytics.git"
   },
   "license": "MIT",
-  "author": "",
+  "author": "deepso7 (https://github.com/deepso7)",
   "sideEffects": false,
   "type": "module",
   "exports": {
@@ -42,7 +42,8 @@
   "module": "./dist/index.mjs",
   "types": "./dist/index.d.mts",
   "files": [
-    "dist"
+    "dist",
+    "LICENSE"
   ],
   "scripts": {
     "build": "tsdown",
@@ -51,11 +52,14 @@
     "fix": "ultracite fix",
     "prepare": "effect-tsgo patch",
     "prepublishOnly": "pnpm run build",
+    "publint": "publint",
     "release": "pnpm run build && changeset publish",
     "test": "vitest",
+    "test:types": "attw --pack --profile node16",
     "version": "changeset version"
   },
   "devDependencies": {
+    "@arethetypeswrong/cli": "0.18.5",
     "@biomejs/biome": "2.5.12",
     "@changesets/cli": "3.0.2",
     "@effect/tsgo": "0.45.0",
@@ -63,6 +67,7 @@
     "@total-typescript/ts-reset": "0.6.1",
     "@types/node": "26.5.1",
     "effect": "4.0.0-rc.113",
+    "publint": "0.3.24",
     "tsdown": "0.23.0",
     "tsx": "4.23.13",
     "typescript": "7.0.2",
@@ -70,7 +75,10 @@
     "vitest": "5.0.0"
   },
   "peerDependencies": {
-    "effect": "4.0.0-rc.113"
+    "effect": ">=4.0.0-rc.113 <5"
   },
-  "packageManager": "pnpm@12.3.4"
+  "packageManager": "pnpm@12.3.4",
+  "engines": {
+    "node": ">=20"
+  }
 }
