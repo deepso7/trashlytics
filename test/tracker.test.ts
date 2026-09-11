@@ -325,6 +325,50 @@ describe("tracker", () => {
     );
   });
 
+  it("aborts the sink signal when a delivery times out", async () => {
+    let observed: AbortSignal | undefined;
+    const tracker = createTracker({
+      batchSize: 1,
+      deliveryTimeout: 20,
+      events,
+      flushInterval: 0,
+      onError: () => {
+        // Timeout is expected; assertions happen below.
+      },
+      sink: (_batch, signal) => {
+        observed = signal;
+
+        return new Promise<void>(() => {
+          // Never settles; the timeout must abandon and abort it.
+        });
+      },
+    });
+
+    tracker.track("signup", { plan: "free", userId: "u_1" });
+
+    await tracker.close();
+
+    expect(observed?.aborted).toBe(true);
+  });
+
+  it("does not abort the sink signal on a successful delivery", async () => {
+    let observed: AbortSignal | undefined;
+    await using tracker = createTracker({
+      events,
+      flushInterval: 0,
+      sink: (_batch, signal) => {
+        observed = signal;
+      },
+    });
+
+    tracker.track("signup", { plan: "free", userId: "u_1" });
+
+    await tracker.flush();
+
+    expect(observed).toBeInstanceOf(AbortSignal);
+    expect(observed?.aborted).toBe(false);
+  });
+
   it("does not drop an in-flight batch when closed mid-delivery", async () => {
     const delivered: TrackedEvent<typeof events>[] = [];
     let signalStarted = () => {

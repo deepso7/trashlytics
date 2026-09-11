@@ -307,7 +307,10 @@ export function consoleSink<Events extends EventsMap>(
 /**
  * Fetch options accepted by {@link httpSink}.
  */
-export type HttpSinkOptions = Omit<RequestInit, "body" | "method"> & {
+export type HttpSinkOptions = Omit<
+  RequestInit,
+  "body" | "method" | "signal"
+> & {
   /** HTTP method used to deliver batches. Defaults to `POST`. */
   readonly method?: "POST" | "PUT" | "PATCH";
   /** Custom fetch implementation. Defaults to `globalThis.fetch`. */
@@ -319,6 +322,10 @@ export type HttpSinkOptions = Omit<RequestInit, "body" | "method"> & {
  *
  * `keepalive` defaults to `true` so in-flight batches survive page unloads in
  * browsers. Note that browsers cap keepalive request bodies at ~64KB.
+ *
+ * The request is aborted if the delivery is interrupted or exceeds the
+ * tracker's `deliveryTimeout`, so `signal` is managed here and cannot be
+ * supplied through `options`.
  *
  * @param url - HTTP endpoint that receives event batches.
  * @param options - Fetch options and optional delivery method.
@@ -332,7 +339,7 @@ export function httpSink<Events extends EventsMap>(
   return (batch) =>
     Effect.tryPromise({
       catch: (cause) => new SinkError({ cause }),
-      try: async () => {
+      try: async (signal) => {
         const headers = new Headers(init.headers);
 
         if (!headers.has("content-type")) {
@@ -345,6 +352,7 @@ export function httpSink<Events extends EventsMap>(
           body: JSON.stringify(batch),
           headers,
           method: method ?? "POST",
+          signal,
         });
 
         if (!response.ok) {
