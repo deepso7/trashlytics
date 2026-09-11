@@ -311,6 +311,7 @@ export function httpSink<Events extends EventsMap>(
 
   return (batch) =>
     Effect.tryPromise({
+      catch: (cause) => new SinkError({ cause }),
       try: async () => {
         const headers = new Headers(init.headers);
 
@@ -321,16 +322,15 @@ export function httpSink<Events extends EventsMap>(
         const response = await (fetchImpl ?? globalThis.fetch)(url, {
           keepalive: true,
           ...init,
+          body: JSON.stringify(batch),
           headers,
           method: method ?? "POST",
-          body: JSON.stringify(batch),
         });
 
         if (!response.ok) {
           throw new Error(`HTTP sink failed with status ${response.status}`);
         }
       },
-      catch: (cause) => new SinkError({ cause }),
     });
 }
 
@@ -348,6 +348,7 @@ export function beaconSink<Events extends EventsMap>(
 ): Sink<Events, SinkError> {
   return (batch) =>
     Effect.try({
+      catch: (cause) => new SinkError({ cause }),
       try: () => {
         if (typeof navigator === "undefined" || !navigator.sendBeacon) {
           throw new Error("navigator.sendBeacon is not available");
@@ -361,7 +362,6 @@ export function beaconSink<Events extends EventsMap>(
           throw new Error("navigator.sendBeacon refused the payload");
         }
       },
-      catch: (cause) => new SinkError({ cause }),
     });
 }
 
@@ -555,12 +555,12 @@ export function make<
 
     const deliver = (batch: readonly TrackedEvent<Events>[]) =>
       Effect.retry(attemptDelivery(batch), {
-        times: retry.attempts,
         schedule: retry.jitter
           ? Schedule.jittered(
               Schedule.exponential(Duration.millis(retry.delay), retry.factor)
             )
           : Schedule.exponential(Duration.millis(retry.delay), retry.factor),
+        times: retry.attempts,
       }).pipe(
         Effect.tapCause((cause) =>
           Effect.sync(() => {
@@ -599,6 +599,7 @@ export function make<
     const drain = deliveryLock.withPermit(
       Effect.uninterruptible(
         Effect.gen(function* () {
+          // biome-ignore lint/suspicious/noUnnecessaryConditions: intentional drain loop; exits via return once the queue is empty.
           while (true) {
             const batch = yield* takeBatch;
 
@@ -618,9 +619,10 @@ export function make<
       )
     );
 
-    const drainSilently = drain.pipe(Effect.catchCause(() => Effect.void));
+    const drainSilently = drain.pipe(Effect.ignoreCause);
 
     const worker = Effect.gen(function* () {
+      // biome-ignore lint/suspicious/noUnnecessaryConditions: the worker runs until scope shutdown interrupts it.
       while (true) {
         yield* flushInterval > 0
           ? Effect.timeoutOption(
@@ -702,10 +704,10 @@ export function make<
     });
 
     const tracker: Tracker<Events, Error, Requirements> = {
-      track: track as Tracker<Events, Error, Requirements>["track"],
-      trackNow: trackNow as Tracker<Events, Error, Requirements>["trackNow"],
       flush: drain,
       size: Effect.sync(() => Queue.sizeUnsafe(queue)),
+      track: track as Tracker<Events, Error, Requirements>["track"],
+      trackNow: trackNow as Tracker<Events, Error, Requirements>["trackNow"],
     };
 
     return tracker;
@@ -730,9 +732,9 @@ function validatePayload(
       Effect.mapError(
         (error) =>
           new EventValidationError({
-            key,
-            issues: [{ message: error.message }],
             cause: error,
+            issues: [{ message: error.message }],
+            key,
           })
       )
     );
@@ -745,8 +747,8 @@ function validatePayload(
       ? Effect.succeed(result.value)
       : Effect.fail(
           new EventValidationError({
-            key,
             issues: result.issues.map(normalizeIssue),
+            key,
           })
         );
 

@@ -11,8 +11,8 @@ import {
 
 const events = {
   signup: event("user.signup", {
-    userId: Schema.String,
     plan: Schema.Literals(["free", "pro"]),
+    userId: Schema.String,
   }),
 };
 
@@ -33,9 +33,9 @@ describe("effect tracker", () => {
     await Effect.runPromise(
       Effect.scoped(
         Effect.gen(function* () {
-          const tracker = yield* make({ events, sink, flushInterval: 0 });
+          const tracker = yield* make({ events, flushInterval: 0, sink });
 
-          yield* tracker.track("signup", { userId: "u_1", plan: "free" });
+          yield* tracker.track("signup", { plan: "free", userId: "u_1" });
           yield* tracker.flush;
         })
       )
@@ -46,7 +46,7 @@ describe("effect tracker", () => {
       {
         key: "signup",
         name: "user.signup",
-        payload: { userId: "u_1", plan: "free" },
+        payload: { plan: "free", userId: "u_1" },
       },
     ]);
   });
@@ -57,10 +57,10 @@ describe("effect tracker", () => {
     const error = await Effect.runPromise(
       Effect.scoped(
         Effect.gen(function* () {
-          const tracker = yield* make({ events, sink, flushInterval: 0 });
+          const tracker = yield* make({ events, flushInterval: 0, sink });
 
           return yield* tracker
-            .track("signup", { userId: "u_1", plan: "enterprise" } as never)
+            .track("signup", { plan: "enterprise", userId: "u_1" } as never)
             .pipe(Effect.flip);
         })
       )
@@ -87,12 +87,12 @@ describe("effect tracker", () => {
         Effect.gen(function* () {
           const tracker = yield* make({
             events,
-            sink,
             flushInterval: 0,
             retry: { attempts: 2, delay: 1, factor: 1 },
+            sink,
           });
 
-          yield* tracker.trackNow("signup", { userId: "u_1", plan: "free" });
+          yield* tracker.trackNow("signup", { plan: "free", userId: "u_1" });
         })
       )
     );
@@ -114,7 +114,7 @@ describe("effect tracker", () => {
           });
 
           return yield* tracker
-            .trackNow("signup", { userId: "u_1", plan: "free" })
+            .trackNow("signup", { plan: "free", userId: "u_1" })
             .pipe(Effect.flip);
         })
       )
@@ -131,8 +131,8 @@ describe("effect tracker", () => {
       Effect.scoped(
         Effect.gen(function* () {
           const tracker = yield* make({
-            events,
             batchSize: 1,
+            events,
             flushInterval: 0,
             sink: (batch) =>
               Effect.gen(function* () {
@@ -142,7 +142,7 @@ describe("effect tracker", () => {
               }),
           });
 
-          yield* tracker.track("signup", { userId: "u_1", plan: "free" });
+          yield* tracker.track("signup", { plan: "free", userId: "u_1" });
           // Leave the scope while the background worker is mid-delivery.
           yield* sinkStarted.await;
         })
@@ -160,11 +160,11 @@ describe("effect tracker", () => {
         Effect.gen(function* () {
           const tracker = yield* make({
             events,
-            sink,
             flushInterval: 10_000,
+            sink,
           });
 
-          yield* tracker.track("signup", { userId: "u_1", plan: "free" });
+          yield* tracker.track("signup", { plan: "free", userId: "u_1" });
 
           expect(batches).toHaveLength(0);
         })
@@ -180,10 +180,10 @@ describe("effect tracker", () => {
     const size = await Effect.runPromise(
       Effect.scoped(
         Effect.gen(function* () {
-          const tracker = yield* make({ events, sink, flushInterval: 0 });
+          const tracker = yield* make({ events, flushInterval: 0, sink });
 
-          yield* tracker.track("signup", { userId: "u_1", plan: "free" });
-          yield* tracker.track("signup", { userId: "u_2", plan: "pro" });
+          yield* tracker.track("signup", { plan: "free", userId: "u_1" });
+          yield* tracker.track("signup", { plan: "pro", userId: "u_2" });
 
           return yield* tracker.size;
         })
@@ -199,9 +199,9 @@ describe("effect tracker", () => {
     await Effect.runPromise(
       Effect.scoped(
         Effect.gen(function* () {
-          const tracker = yield* make({ events, sink, flushInterval: 5 });
+          const tracker = yield* make({ events, flushInterval: 5, sink });
 
-          yield* tracker.track("signup", { userId: "u_1", plan: "free" });
+          yield* tracker.track("signup", { plan: "free", userId: "u_1" });
 
           yield* Effect.sleep(50);
         })

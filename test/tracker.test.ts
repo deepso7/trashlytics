@@ -11,15 +11,15 @@ import {
 } from "../src/index";
 
 const events = {
-  signup: event("user.signup", {
-    userId: Schema.String,
-    plan: Schema.Literals(["free", "pro"]),
-  }),
+  pageview: event("page.viewed"),
   purchase: event("purchase.completed", {
     orderId: Schema.String,
     total: Schema.Number,
   }),
-  pageview: event("page.viewed"),
+  signup: event("user.signup", {
+    plan: Schema.Literals(["free", "pro"]),
+    userId: Schema.String,
+  }),
 };
 
 const waitFor = async (predicate: () => boolean, timeout = 1000) => {
@@ -30,6 +30,7 @@ const waitFor = async (predicate: () => boolean, timeout = 1000) => {
       throw new Error("condition not met in time");
     }
 
+    // biome-ignore lint/performance/noAwaitInLoops: polling helper intentionally sleeps between checks.
     await new Promise((resolve) => setTimeout(resolve, 5));
   }
 };
@@ -57,7 +58,7 @@ describe("tracker", () => {
       },
     });
 
-    tracker.track("signup", { userId: "u_1", plan: "pro" });
+    tracker.track("signup", { plan: "pro", userId: "u_1" });
     tracker.track("purchase", { orderId: "o_1", total: 20 });
 
     await tracker.flush();
@@ -67,7 +68,7 @@ describe("tracker", () => {
       {
         key: "signup",
         name: "user.signup",
-        payload: { userId: "u_1", plan: "pro" },
+        payload: { plan: "pro", userId: "u_1" },
       },
       {
         key: "purchase",
@@ -108,7 +109,7 @@ describe("tracker", () => {
       },
     });
 
-    tracker.track("signup", { userId: "u_1", plan: "enterprise" } as never);
+    tracker.track("signup", { plan: "enterprise", userId: "u_1" } as never);
 
     await waitFor(() => errors.length === 1);
     await tracker.flush();
@@ -148,8 +149,6 @@ describe("tracker", () => {
   it("accepts standard schemas (zod-style) as event definitions", async () => {
     const userIdSchema: StandardSchemaV1<unknown, { userId: string }> = {
       "~standard": {
-        version: 1,
-        vendor: "test",
         validate: (value): StandardResult<{ userId: string }> => {
           if (
             typeof value === "object" &&
@@ -162,6 +161,8 @@ describe("tracker", () => {
 
           return { issues: [{ message: "expected { userId: string }" }] };
         },
+        vendor: "test",
+        version: 1,
       },
     };
 
@@ -193,9 +194,9 @@ describe("tracker", () => {
   it("merges tracker context into event meta", async () => {
     const batches: (readonly TrackedEvent<typeof events>[])[] = [];
     await using tracker = createTracker({
+      context: () => ({ sessionId: "s_1", source: "context" }),
       events,
       flushInterval: 0,
-      context: () => ({ sessionId: "s_1", source: "context" }),
       sink: (batch) => {
         batches.push(batch);
       },
@@ -203,7 +204,7 @@ describe("tracker", () => {
 
     tracker.track(
       "signup",
-      { userId: "u_1", plan: "free" },
+      { plan: "free", userId: "u_1" },
       { meta: { source: "event" } }
     );
 
@@ -218,16 +219,16 @@ describe("tracker", () => {
   it("delivers in the background when the batch size is reached", async () => {
     const batches: (readonly TrackedEvent<typeof events>[])[] = [];
     await using tracker = createTracker({
-      events,
       batchSize: 2,
+      events,
       flushInterval: 0,
       sink: (batch) => {
         batches.push([...batch]);
       },
     });
 
-    tracker.track("signup", { userId: "u_1", plan: "free" });
-    tracker.track("signup", { userId: "u_2", plan: "pro" });
+    tracker.track("signup", { plan: "free", userId: "u_1" });
+    tracker.track("signup", { plan: "pro", userId: "u_2" });
 
     await waitFor(() => batches.length === 1);
 
@@ -237,19 +238,19 @@ describe("tracker", () => {
   it("splits flushes by batch size", async () => {
     const batches: (readonly TrackedEvent<typeof events>[])[] = [];
     await using tracker = createTracker({
-      events,
       batchSize: 2,
+      events,
       flushInterval: 1_000_000,
       sink: (batch) => {
         batches.push([...batch]);
       },
     });
 
-    tracker.track("signup", { userId: "u_1", plan: "free" });
+    tracker.track("signup", { plan: "free", userId: "u_1" });
 
     await tracker.flush();
 
-    tracker.track("signup", { userId: "u_2", plan: "pro" });
+    tracker.track("signup", { plan: "pro", userId: "u_2" });
     tracker.track("purchase", { orderId: "o_1", total: 42 });
     tracker.track("purchase", { orderId: "o_2", total: 7 });
 
@@ -275,7 +276,7 @@ describe("tracker", () => {
       },
     });
 
-    await tracker.trackNow("signup", { userId: "u_1", plan: "free" });
+    await tracker.trackNow("signup", { plan: "free", userId: "u_1" });
 
     expect(attempts).toBe(3);
   });
@@ -292,7 +293,7 @@ describe("tracker", () => {
     });
 
     await expect(
-      tracker.trackNow("signup", { userId: "u_1", plan: "free" })
+      tracker.trackNow("signup", { plan: "free", userId: "u_1" })
     ).rejects.toThrow();
 
     expect(errors).toHaveLength(1);
@@ -302,9 +303,9 @@ describe("tracker", () => {
   it("close() stays bounded when the sink never settles", async () => {
     const errors: unknown[] = [];
     const tracker = createTracker({
-      events,
       batchSize: 1,
       deliveryTimeout: 20,
+      events,
       flushInterval: 0,
       onError: (error) => errors.push(error),
       sink: () =>
@@ -313,7 +314,7 @@ describe("tracker", () => {
         }),
     });
 
-    tracker.track("signup", { userId: "u_1", plan: "free" });
+    tracker.track("signup", { plan: "free", userId: "u_1" });
 
     await tracker.close();
 
@@ -333,8 +334,8 @@ describe("tracker", () => {
       signalStarted = resolve;
     });
     const tracker = createTracker({
-      events,
       batchSize: 1,
+      events,
       flushInterval: 0,
       sink: async (batch) => {
         signalStarted();
@@ -343,7 +344,7 @@ describe("tracker", () => {
       },
     });
 
-    tracker.track("signup", { userId: "u_1", plan: "free" });
+    tracker.track("signup", { plan: "free", userId: "u_1" });
 
     await sinkStarted;
     await tracker.close();
@@ -361,7 +362,7 @@ describe("tracker", () => {
       },
     });
 
-    tracker.track("signup", { userId: "u_1", plan: "free" });
+    tracker.track("signup", { plan: "free", userId: "u_1" });
 
     await tracker.close();
 
@@ -371,13 +372,13 @@ describe("tracker", () => {
   it("waits for async validation before flush and close", async () => {
     const asyncSchema: StandardSchemaV1<unknown, { userId: string }> = {
       "~standard": {
-        version: 1,
-        vendor: "test",
         validate: async (value) => {
           await new Promise((resolve) => setTimeout(resolve, 20));
 
           return { value: value as { userId: string } };
         },
+        vendor: "test",
+        version: 1,
       },
     };
 
@@ -410,7 +411,7 @@ describe("tracker", () => {
       },
     });
 
-    tracker.track("signup", { userId: "u_1", plan: "free" });
+    tracker.track("signup", { plan: "free", userId: "u_1" });
 
     await waitFor(() => errors.length >= 1);
     await tracker.close();
@@ -431,7 +432,7 @@ describe("tracker", () => {
 
     await tracker.close();
 
-    tracker.track("signup", { userId: "u_1", plan: "free" });
+    tracker.track("signup", { plan: "free", userId: "u_1" });
 
     await waitFor(() => errors.length === 1);
     expect(errors[0]).toBeInstanceOf(TrackerClosedError);
@@ -450,13 +451,13 @@ describe("tracker", () => {
       },
     });
 
-    tracker.track("signup", { userId: "u_1", plan: "free" });
+    tracker.track("signup", { plan: "free", userId: "u_1" });
 
     const closed = tracker.close();
 
-    tracker.track("signup", { userId: "u_2", plan: "pro" });
+    tracker.track("signup", { plan: "pro", userId: "u_2" });
     await expect(
-      tracker.trackNow("signup", { userId: "u_3", plan: "pro" })
+      tracker.trackNow("signup", { plan: "pro", userId: "u_3" })
     ).rejects.toBeInstanceOf(TrackerClosedError);
 
     await closed;
