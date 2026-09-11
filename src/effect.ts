@@ -55,7 +55,9 @@ export interface StandardIssue {
 }
 
 type AnyEffectSchema = Schema.ConstraintDecoder<unknown, never>;
-type EventFields = Schema.Struct.Fields;
+// Field schemas must be service-free: payloads are validated through Standard
+// Schema, which has nowhere to provide decoding services from.
+type EventFields = Schema.Struct.Fields & Record<string, AnyEffectSchema>;
 
 /**
  * Any schema accepted as an event payload validator.
@@ -147,11 +149,15 @@ export type TrackError =
 /**
  * Defines a trackable event: its public name and the schema used to validate
  * its payload. Created with {@link event}.
+ *
+ * Effect schemas are normalized to Standard Schema when the definition is
+ * built, so validation has a single code path regardless of which validator
+ * the event was declared with.
  */
 export interface EventDefinition<Name extends string, Payload> {
   readonly _payload?: Payload;
   readonly name: Name;
-  readonly schema: PayloadSchema | undefined;
+  readonly schema: StandardSchemaV1 | undefined;
 }
 
 /**
@@ -249,11 +255,24 @@ export function event(
     return { name, schema: undefined };
   }
 
-  if (isEffectSchema(schemaOrFields) || isStandardSchema(schemaOrFields)) {
+  if (isStandardSchema(schemaOrFields)) {
     return { name, schema: schemaOrFields };
   }
 
-  return { name, schema: Schema.Struct(schemaOrFields) };
+  // Effect schemas (and bare `Schema.Struct` fields) are converted up front so
+  // validatePayload only ever deals with Standard Schema.
+  //
+  // The narrowing is needed because `Struct`'s decoding services are a deferred
+  // mapped type that TypeScript cannot reduce to `never` for the unresolved
+  // fields of this loose implementation signature. The public overloads
+  // constrain fields to service-free schemas, which is what makes it sound.
+  const effectSchema = (
+    isEffectSchema(schemaOrFields)
+      ? schemaOrFields
+      : Schema.Struct(schemaOrFields)
+  ) as AnyEffectSchema;
+
+  return { name, schema: Schema.toStandardSchemaV1(effectSchema) };
 }
 
 // -----------------------------------------------------------------------------
@@ -722,25 +741,12 @@ export function make<
 // -----------------------------------------------------------------------------
 
 function validatePayload(
-  schema: PayloadSchema | undefined,
+  schema: StandardSchemaV1 | undefined,
   key: string,
   payload: unknown
 ): Effect.Effect<unknown, EventValidationError> {
   if (schema === undefined) {
     return Effect.void;
-  }
-
-  if (isEffectSchema(schema)) {
-    return Schema.decodeUnknownEffect(schema)(payload).pipe(
-      Effect.mapError(
-        (error) =>
-          new EventValidationError({
-            cause: error,
-            issues: [{ message: error.message }],
-            key,
-          })
-      )
-    );
   }
 
   const toEffect = (

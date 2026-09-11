@@ -62,6 +62,28 @@ describe("effect tracker", () => {
     })
   );
 
+  it.effect("reports one issue per invalid field, with paths", () =>
+    Effect.gen(function* () {
+      const { sink } = collectingSink();
+      const tracker = yield* make({ events, flushInterval: 0, sink });
+
+      const error = yield* tracker
+        .track("signup", { plan: "enterprise", userId: 42 } as never)
+        .pipe(Effect.flip);
+
+      assert.instanceOf(error, EventValidationError);
+      if (!(error instanceof EventValidationError)) {
+        return;
+      }
+
+      assert.deepStrictEqual(
+        error.issues.map((issue) => issue.path),
+        [["plan"], ["userId"]]
+      );
+      assert.strictEqual(error.issues.length, 2);
+    })
+  );
+
   // The retry schedule is clock-driven, so this runs against real services
   // with a 1ms delay rather than adjusting TestClock between attempts.
   it.live("retries sink failures", () =>
