@@ -1,5 +1,6 @@
 import {
   Cause,
+  Clock,
   Data,
   Duration,
   Effect,
@@ -439,8 +440,8 @@ export interface TrackOptions {
   /** Metadata merged onto the tracked event (over tracker `context`). */
   readonly meta?: EventMeta;
   /**
-   * Event timestamp in milliseconds since the Unix epoch. Defaults to
-   * `Date.now()`.
+   * Event timestamp in milliseconds since the Unix epoch. Defaults to the
+   * current time read from the Effect `Clock`.
    */
   readonly timestamp?: number;
 }
@@ -648,7 +649,9 @@ export function make<
       })
     );
 
-    const makeEvent = Effect.fn("trashlytics.makeEvent")(function* (
+    // Untraced: this runs on every tracked event, and a span per event is
+    // measurably more expensive than the work it describes.
+    const makeEvent = Effect.fnUntraced(function* (
       key: keyof Events & string,
       payload: unknown,
       trackOptions: TrackOptions | undefined
@@ -670,14 +673,14 @@ export function make<
         key,
         name: definition.name,
         payload: decoded as EventPayload<Events[keyof Events & string]>,
-        timestamp: trackOptions?.timestamp ?? Date.now(),
+        timestamp: trackOptions?.timestamp ?? (yield* Clock.currentTimeMillis),
         ...(meta === undefined ? {} : { meta }),
       };
 
       return trackedEvent;
     });
 
-    const track = Effect.fn("trashlytics.track")(function* (
+    const track = Effect.fnUntraced(function* (
       key: keyof Events & string,
       payload?: unknown,
       trackOptions?: TrackOptions

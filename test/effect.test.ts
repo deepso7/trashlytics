@@ -174,6 +174,35 @@ describe("effect tracker", () => {
     })
   );
 
+  it.effect("stamps timestamps from the Clock", () =>
+    Effect.gen(function* () {
+      const { batches, sink } = collectingSink();
+      const tracker = yield* make({ events, flushInterval: 0, sink });
+
+      yield* TestClock.adjust("1 second");
+      yield* tracker.track("signup", { plan: "free", userId: "u_1" });
+      yield* tracker.flush;
+
+      assert.strictEqual(batches[0]?.[0]?.timestamp, 1000);
+    })
+  );
+
+  it.effect("prefers an explicit timestamp over the Clock", () =>
+    Effect.gen(function* () {
+      const { batches, sink } = collectingSink();
+      const tracker = yield* make({ events, flushInterval: 0, sink });
+
+      yield* tracker.track(
+        "signup",
+        { plan: "free", userId: "u_1" },
+        { timestamp: 42 }
+      );
+      yield* tracker.flush;
+
+      assert.strictEqual(batches[0]?.[0]?.timestamp, 42);
+    })
+  );
+
   it.effect("reports queue size", () =>
     Effect.gen(function* () {
       const { sink } = collectingSink();
