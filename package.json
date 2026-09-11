@@ -1,11 +1,21 @@
 {
   "name": "trashlytics",
-  "type": "module",
   "version": "0.4.0",
   "description": "A lightweight event tracking library",
-  "main": "./dist/index.cjs",
-  "module": "./dist/index.mjs",
-  "types": "./dist/index.d.mts",
+  "keywords": [
+    "analytics",
+    "tracking",
+    "events",
+    "telemetry"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/deepso7/trashlytics"
+  },
+  "license": "MIT",
+  "author": "",
+  "sideEffects": false,
+  "type": "module",
   "exports": {
     ".": {
       "import": {
@@ -28,48 +38,38 @@
       }
     }
   },
+  "main": "./dist/index.cjs",
+  "module": "./dist/index.mjs",
+  "types": "./dist/index.d.mts",
   "files": [
     "dist"
   ],
-  "sideEffects": false,
   "scripts": {
     "build": "tsdown",
-    "test": "vitest",
+    "changeset": "changeset",
     "check": "ultracite check",
     "fix": "ultracite fix",
-    "prepare": "effect-language-service patch",
+    "prepare": "effect-tsgo patch",
     "prepublishOnly": "pnpm run build",
-    "changeset": "changeset",
-    "version": "changeset version",
-    "release": "pnpm run build && changeset publish"
+    "release": "pnpm run build && changeset publish",
+    "test": "vitest",
+    "version": "changeset version"
   },
-  "keywords": [
-    "analytics",
-    "tracking",
-    "events",
-    "telemetry"
-  ],
-  "author": "",
-  "license": "MIT",
-  "repository": {
-    "type": "git",
-    "url": "https://github.com/deepso7/trashlytics"
-  },
-  "packageManager": "pnpm@11.9.0",
   "devDependencies": {
-    "@biomejs/biome": "2.5.2",
-    "@changesets/cli": "2.31.0",
-    "@effect/language-service": "0.86.2",
+    "@biomejs/biome": "2.5.12",
+    "@changesets/cli": "3.0.2",
+    "@effect/tsgo": "0.45.0",
     "@total-typescript/ts-reset": "0.6.1",
-    "@types/node": "26.1.0",
-    "effect": "4.0.0-beta.93",
-    "tsdown": "0.22.3",
-    "tsx": "4.22.4",
-    "typescript": "6.0.3",
-    "ultracite": "7.8.3",
-    "vitest": "4.1.9"
+    "@types/node": "26.5.1",
+    "effect": "4.0.0-rc.113",
+    "tsdown": "0.23.0",
+    "tsx": "4.23.13",
+    "typescript": "7.0.2",
+    "ultracite": "7.11.1",
+    "vitest": "5.0.0"
   },
   "peerDependencies": {
-    "effect": "4.0.0-beta.93"
-  }
+    "effect": "4.0.0-rc.113"
+  },
+  "packageManager": "pnpm@12.3.4"
 }

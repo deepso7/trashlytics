@@ -13,6 +13,7 @@ import { make, SinkError, TrackerClosedError } from "./effect";
 // TypeScript's downlevel helpers use — without mutating the Symbol global
 // (this module declares `sideEffects: false`).
 const asyncDispose: typeof Symbol.asyncDispose =
+  // biome-ignore lint/suspicious/noUnnecessaryConditions: Symbol.asyncDispose is typed as always defined but is absent at runtime on platforms predating explicit resource management.
   Symbol.asyncDispose ??
   (Symbol.for("Symbol.asyncDispose") as typeof Symbol.asyncDispose);
 
@@ -122,6 +123,7 @@ export function createTracker<const Events extends EventsMap>(
   const inFlight = new Set<Promise<void>>();
   const settleInFlight = async () => {
     while (inFlight.size > 0) {
+      // biome-ignore lint/performance/noAwaitInLoops: each iteration drains the current snapshot; loop until no in-flight tracks remain.
       await Promise.allSettled([...inFlight]);
     }
   };
@@ -152,6 +154,9 @@ export function createTracker<const Events extends EventsMap>(
   };
 
   return {
+    close,
+
+    flush,
     track: (key, ...args) => {
       // Hard barrier: once close() has been called, no new tracking work is
       // started, so close() cannot race a late enqueue.
@@ -178,10 +183,6 @@ export function createTracker<const Events extends EventsMap>(
         ? Effect.runPromise(tracker.trackNow(key, ...args))
         : Promise.reject(new TrackerClosedError()),
 
-    flush,
-
-    close,
-
     [asyncDispose]: close,
   };
 }
@@ -205,8 +206,8 @@ function adaptSink<Events extends EventsMap>(
 
       if (result instanceof Promise) {
         return Effect.tryPromise({
-          try: () => result as Promise<void>,
           catch: (cause) => new SinkError({ cause }),
+          try: () => result as Promise<void>,
         });
       }
 
