@@ -325,6 +325,25 @@ describe("tracker", () => {
     );
   });
 
+  it("reports queue size", async () => {
+    await using tracker = createTracker({
+      events,
+      flushInterval: 0,
+      sink: () => {
+        // Discard.
+      },
+    });
+
+    expect(tracker.size()).toBe(0);
+
+    tracker.track("signup", { plan: "free", userId: "u_1" });
+    await waitFor(() => tracker.size() === 1);
+
+    await tracker.flush();
+
+    expect(tracker.size()).toBe(0);
+  });
+
   it("aborts the sink signal when a delivery times out", async () => {
     let observed: AbortSignal | undefined;
     const tracker = createTracker({

@@ -92,6 +92,8 @@ export interface Tracker<Events extends EventsMap> extends AsyncDisposable {
   readonly close: () => Promise<void>;
   /** Delivers all currently queued events and waits for completion. */
   readonly flush: () => Promise<void>;
+  /** Number of events currently queued. */
+  readonly size: () => number;
   /**
    * Validates and queues an event for batched background delivery. Fire and
    * forget: it never throws and never waits on the sink. Validation and
@@ -163,6 +165,7 @@ export function createTracker<const Events extends EventsMap>(
     close,
 
     flush,
+    size: () => Effect.runSync(tracker.size),
     track: (key, ...args) => {
       // Hard barrier: once close() has been called, no new tracking work is
       // started, so close() cannot race a late enqueue.
