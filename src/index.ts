@@ -227,7 +227,7 @@ function callSink<Events extends EventsMap>(
     try {
       result = sink(batch, signal);
     } catch (cause) {
-      return Effect.fail(new SinkError({ cause }));
+      return Effect.fail(toSinkError(cause));
     }
 
     if (Effect.isEffect(result)) {
@@ -236,13 +236,19 @@ function callSink<Events extends EventsMap>(
 
     if (result instanceof Promise) {
       return Effect.tryPromise({
-        catch: (cause) => new SinkError({ cause }),
+        catch: toSinkError,
         try: () => result as Promise<void>,
       });
     }
 
     return Effect.void;
   });
+}
+
+// A sink that already reports a SinkError is passed through, so its `retryable`
+// flag survives and the cause is not nested inside a second SinkError.
+function toSinkError(cause: unknown): SinkError {
+  return cause instanceof SinkError ? cause : new SinkError({ cause });
 }
 
 function attachLifecycleFlush(enabled: boolean, flush: () => void): () => void {

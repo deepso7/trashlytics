@@ -373,8 +373,12 @@ export function httpSink<Events extends EventsMap>(
                   `HTTP sink failed with status ${response.status}`
                 ),
                 // A rejected payload stays rejected however often it is resent,
-                // so only rate limiting and server faults are worth retrying.
-                retryable: response.status === 429 || response.status >= 500,
+                // so only transient statuses are worth retrying: request
+                // timeouts, rate limiting, and server faults.
+                retryable:
+                  response.status === 408 ||
+                  response.status === 429 ||
+                  response.status >= 500,
               })
             )
       )

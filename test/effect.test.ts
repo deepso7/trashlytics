@@ -136,9 +136,9 @@ describe("effect tracker", () => {
     })
   );
 
-  it.live("retries a server fault and a rate limit", () =>
+  it.live("retries transient HTTP failures", () =>
     Effect.gen(function* () {
-      for (const status of [503, 429]) {
+      for (const status of [503, 429, 408]) {
         let attempts = 0;
         const tracker = yield* make({
           events,

@@ -113,7 +113,7 @@ A sink is just a function receiving batches. It can return `void`, a `Promise`, 
 
 Failed deliveries are retried per the `retry` policy; batches that still fail are reported to `onError` and dropped.
 
-Retries only continue while redelivery could plausibly succeed. `httpSink` retries `429` and `5xx` responses plus transport errors, and gives up immediately on other `4xx` responses — resending a payload the server rejected only delays the batches behind it. Custom sinks can say the same by failing with `new SinkError({ cause, retryable: false })`.
+Retries only continue while redelivery could plausibly succeed. `httpSink` retries `408`, `429` and `5xx` responses plus transport errors, and gives up immediately on other `4xx` responses — resending a payload the server rejected only delays the batches behind it. Custom sinks can say the same by failing with `new SinkError({ cause, retryable: false })`.
 
 The second argument is an `AbortSignal` that is aborted when a delivery is abandoned, either because `deliveryTimeout` elapsed or because delivery was interrupted. Forward it to cancellable work so abandoned deliveries stop consuming resources:
 

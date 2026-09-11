@@ -325,6 +325,49 @@ describe("tracker", () => {
     );
   });
 
+  it("honours retryable: false from a custom sink", async () => {
+    let attempts = 0;
+    await using tracker = createTracker({
+      events,
+      flushInterval: 0,
+      onError: () => {
+        // Failure is expected; assertions happen below.
+      },
+      retry: { attempts: 5, delay: 1, factor: 1 },
+      sink: () => {
+        attempts += 1;
+
+        return Promise.reject(
+          new SinkError({ cause: "rejected payload", retryable: false })
+        );
+      },
+    });
+
+    await expect(
+      tracker.trackNow("signup", { plan: "free", userId: "u_1" })
+    ).rejects.toBeInstanceOf(SinkError);
+
+    expect(attempts).toBe(1);
+  });
+
+  it("does not double-wrap a SinkError thrown by a custom sink", async () => {
+    const errors: unknown[] = [];
+    await using tracker = createTracker({
+      events,
+      flushInterval: 0,
+      onError: (error) => errors.push(error),
+      sink: () => {
+        throw new SinkError({ cause: "boom", retryable: false });
+      },
+    });
+
+    await expect(
+      tracker.trackNow("signup", { plan: "free", userId: "u_1" })
+    ).rejects.toBeInstanceOf(SinkError);
+
+    expect((errors[0] as SinkError).cause).toBe("boom");
+  });
+
   it("reports queue size", async () => {
     await using tracker = createTracker({
       events,
