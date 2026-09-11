@@ -131,6 +131,13 @@ export class QueueFullError extends Data.TaggedError("QueueFullError")<{
  */
 export class SinkError extends Data.TaggedError("SinkError")<{
   readonly cause: unknown;
+  /**
+   * Whether redelivering the batch could succeed. Defaults to true, since most
+   * delivery failures are transient; set it to false for failures that will
+   * recur no matter how often the batch is resent, such as a rejected payload.
+   * Non-retryable failures skip the remaining `retry` attempts.
+   */
+  readonly retryable?: boolean;
 }> {}
 
 /**
@@ -338,15 +345,16 @@ export function httpSink<Events extends EventsMap>(
 
   return (batch) =>
     Effect.tryPromise({
+      // Transport failures (network down, aborted request) are transient.
       catch: (cause) => new SinkError({ cause }),
-      try: async (signal) => {
+      try: (signal) => {
         const headers = new Headers(init.headers);
 
         if (!headers.has("content-type")) {
           headers.set("content-type", "application/json");
         }
 
-        const response = await (fetchImpl ?? globalThis.fetch)(url, {
+        return (fetchImpl ?? globalThis.fetch)(url, {
           keepalive: true,
           ...init,
           body: JSON.stringify(batch),
@@ -354,12 +362,23 @@ export function httpSink<Events extends EventsMap>(
           method: method ?? "POST",
           signal,
         });
-
-        if (!response.ok) {
-          throw new Error(`HTTP sink failed with status ${response.status}`);
-        }
       },
-    });
+    }).pipe(
+      Effect.flatMap((response) =>
+        response.ok
+          ? Effect.void
+          : Effect.fail(
+              new SinkError({
+                cause: new Error(
+                  `HTTP sink failed with status ${response.status}`
+                ),
+                // A rejected payload stays rejected however often it is resent,
+                // so only rate limiting and server faults are worth retrying.
+                retryable: response.status === 429 || response.status >= 500,
+              })
+            )
+      )
+    );
 }
 
 /**
@@ -589,6 +608,7 @@ export function make<
             )
           : Schedule.exponential(Duration.millis(retry.delay), retry.factor),
         times: retry.attempts,
+        while: isRetryable,
       }).pipe(
         Effect.tapCause((cause) =>
           Effect.sync(() => {
@@ -819,6 +839,11 @@ function normalizeRetry(retry: number | RetryPolicy | undefined) {
     jitter: retry?.jitter ?? false,
   };
 }
+
+// Failures are retried unless they identify themselves as permanent, so a sink
+// with its own error type keeps the previous retry-everything behaviour.
+const isRetryable = (error: unknown) =>
+  !(error instanceof SinkError) || error.retryable !== false;
 
 const isEffectSchema = (value: unknown): value is AnyEffectSchema =>
   (typeof value === "object" || typeof value === "function") &&

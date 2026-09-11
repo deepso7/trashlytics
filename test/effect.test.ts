@@ -4,6 +4,7 @@ import { TestClock } from "effect/testing";
 import {
   EventValidationError,
   event,
+  httpSink,
   make,
   type Sink,
   SinkError,
@@ -108,6 +109,56 @@ describe("effect tracker", () => {
       yield* tracker.trackNow("signup", { plan: "free", userId: "u_1" });
 
       assert.strictEqual(attempts, 3);
+    })
+  );
+
+  it.live("does not retry a rejected payload", () =>
+    Effect.gen(function* () {
+      let attempts = 0;
+      const tracker = yield* make({
+        events,
+        flushInterval: 0,
+        retry: { attempts: 5, delay: 1, factor: 1 },
+        sink: httpSink("https://example.invalid/events", {
+          fetch: () => {
+            attempts += 1;
+
+            return Promise.resolve(new Response(null, { status: 400 }));
+          },
+        }),
+      });
+
+      yield* tracker
+        .trackNow("signup", { plan: "free", userId: "u_1" })
+        .pipe(Effect.flip);
+
+      assert.strictEqual(attempts, 1);
+    })
+  );
+
+  it.live("retries a server fault and a rate limit", () =>
+    Effect.gen(function* () {
+      for (const status of [503, 429]) {
+        let attempts = 0;
+        const tracker = yield* make({
+          events,
+          flushInterval: 0,
+          retry: { attempts: 2, delay: 1, factor: 1 },
+          sink: httpSink("https://example.invalid/events", {
+            fetch: () => {
+              attempts += 1;
+
+              return Promise.resolve(new Response(null, { status }));
+            },
+          }),
+        });
+
+        yield* tracker
+          .trackNow("signup", { plan: "free", userId: "u_1" })
+          .pipe(Effect.flip);
+
+        assert.strictEqual(attempts, 3, `status ${status} should retry`);
+      }
     })
   );
 
