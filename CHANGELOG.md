@@ -1,5 +1,11 @@
 # trashlytics
 
+## 0.6.1
+
+### Patch Changes
+
+- f77bfa9: Bump dependencies to latest, including Effect 4.0.0 stable.
+
 ## 0.6.0
 
 ### Minor Changes
