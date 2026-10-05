@@ -60,19 +60,19 @@
   },
   "devDependencies": {
     "@arethetypeswrong/cli": "0.18.5",
-    "@biomejs/biome": "2.5.12",
-    "@changesets/cli": "3.0.2",
-    "@effect/tsgo": "0.45.0",
-    "@effect/vitest": "4.0.0-rc.113",
+    "@biomejs/biome": "2.5.15",
+    "@changesets/cli": "3.0.3",
+    "@effect/tsgo": "0.48.0",
+    "@effect/vitest": "4.0.0",
     "@total-typescript/ts-reset": "0.6.1",
-    "@types/node": "26.5.1",
-    "effect": "4.0.0-rc.113",
-    "publint": "0.3.24",
+    "@types/node": "26.6.4",
+    "effect": "4.0.0",
+    "publint": "0.3.25",
     "tsdown": "0.23.0",
-    "tsx": "4.23.13",
+    "tsx": "4.23.15",
     "typescript": "7.0.2",
-    "ultracite": "7.11.1",
-    "vitest": "5.0.0"
+    "ultracite": "7.12.2",
+    "vitest": "5.0.3"
   },
   "peerDependencies": {
     "effect": ">=4.0.0-rc.113 <5"
